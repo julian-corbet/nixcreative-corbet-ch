@@ -1,17 +1,19 @@
-# Evaluates modules/nixcreative.nix and verifies catalogue wiring for audio/image/video selections.
+# Evaluates modules/nixcreative.nix and verifies catalogue wiring for daw/vector/raster/3d selections.
 { pkgs, lib ? pkgs.lib }:
 let
   evalWith = selection: (lib.evalModules {
-    modules = [ ../modules/nixcreative.nix selection ];
+    modules = [ ../modules/nixcreative.nix { nixcreative = selection; } ];
   }).config.nixcreative;
 
-  fullAudio = evalWith { audio = [ "audacity" "ardour" ]; };
-  fullImage = evalWith { image = [ "gimp" "krita" ]; };
-  fullVideo = evalWith { video = [ "kdenlive" "blender" "ffmpeg" ]; };
+  fullDaw = evalWith { daw = [ "qtractor" ]; };
+  fullVector = evalWith { vector = [ "inkscape" ]; };
+  fullRaster = evalWith { raster = [ "krita" ]; };
+  full3d = evalWith { "3d" = [ "blender" ]; };
   all = evalWith {
-    audio = [ "audacity" ];
-    image = [ "gimp" ];
-    video = [ "kdenlive" ];
+    daw = [ "qtractor" ];
+    vector = [ "inkscape" ];
+    raster = [ "krita" ];
+    "3d" = [ "blender" ];
   };
 
   has = list: item: lib.elem item list;
@@ -20,35 +22,42 @@ let
     "empty selection resolves to no selected tool" =
       (evalWith { }).selected == [ ];
 
-    "audio selection is expanded, no AUR by default" =
-      fullAudio.archPackages == [ "audacity" "ardour" ] && fullAudio.aurPackages == [ ];
+    "daw selection resolves the exact name, no AUR" =
+      fullDaw.archPackages == [ "qtractor" ] && fullDaw.aurPackages == [ ];
 
-    "audio group + availability summary looks right" =
-      fullAudio.nixosPackages == [ "audacity" "ardour" ]
-      && fullAudio.unavailableOnNixos == [ ];
+    "daw group + availability summary looks right" =
+      fullDaw.nixosPackages == [ "qtractor" ]
+      && fullDaw.unavailableOnNixos == [ ];
 
-    "image selection resolves the exact names" =
-      fullImage.archPackages == [ "gimp" "krita" ]
-      && fullImage.unavailableOnNixos == [ ];
+    "vector selection resolves the exact name" =
+      fullVector.archPackages == [ "inkscape" ]
+      && fullVector.unavailableOnNixos == [ ];
 
-    "video selection resolves the exact names" =
-      fullVideo.archPackages == [ "kdenlive" "blender" "ffmpeg" ]
-      && fullVideo.unavailableOnNixos == [ ];
+    "raster selection resolves the exact name" =
+      fullRaster.archPackages == [ "krita" ]
+      && fullRaster.unavailableOnNixos == [ ];
+
+    "3d selection resolves the exact name" =
+      full3d.archPackages == [ "blender" ]
+      && full3d.unavailableOnNixos == [ ];
 
     "groups compose into one selected list" =
-      lib.length all.selected == 3;
+      lib.length all.selected == 4;
 
     "arch and aur lists never overlap" =
       lib.intersectLists all.archPackages all.aurPackages == [ ];
 
-    "bad audio name is rejected at eval time" =
-      (builtins.tryEval (builtins.deepSeq (evalWith { audio = [ "audioslicer" ]; }).audio true)).success == false;
+    "bad daw name is rejected at eval time" =
+      (builtins.tryEval (builtins.deepSeq (evalWith { daw = [ "ardour" ]; }).daw true)).success == false;
 
-    "bad image name is rejected at eval time" =
-      (builtins.tryEval (builtins.deepSeq (evalWith { image = [ "photoshop" ]; }).image true)).success == false;
+    "bad vector name is rejected at eval time" =
+      (builtins.tryEval (builtins.deepSeq (evalWith { vector = [ "gimp" ]; }).vector true)).success == false;
 
-    "bad video name is rejected at eval time" =
-      (builtins.tryEval (builtins.deepSeq (evalWith { video = [ "finalcut" ]; }).video true)).success == false;
+    "bad raster name is rejected at eval time" =
+      (builtins.tryEval (builtins.deepSeq (evalWith { raster = [ "photoshop" ]; }).raster true)).success == false;
+
+    "bad 3d name is rejected at eval time" =
+      (builtins.tryEval (builtins.deepSeq (evalWith { "3d" = [ "cinema4d" ]; })."3d" true)).success == false;
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: passed: !passed) results);

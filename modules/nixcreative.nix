@@ -17,16 +17,18 @@ let
   };
 
   selected = lib.flatten [
-    (map (k: cat.audio.${k}) cfg.audio)
-    (map (k: cat.image.${k}) cfg.image)
-    (map (k: cat.video.${k}) cfg.video)
+    (map (k: cat.daw.${k}) cfg.daw)
+    (map (k: cat.vector.${k}) cfg.vector)
+    (map (k: cat.raster.${k}) cfg.raster)
+    (map (k: cat."3d".${k}) cfg."3d")
   ];
 in
 {
   options.nixcreative = {
-    audio = mkGroup "audio creative tools" cat.audio;
-    image = mkGroup "image editing and raster tools" cat.image;
-    video = mkGroup "video editing and timeline tools" cat.video;
+    daw = mkGroup "digital audio workstation tools" cat.daw;
+    vector = mkGroup "vector illustration tools" cat.vector;
+    raster = mkGroup "raster/painting tools" cat.raster;
+    "3d" = mkGroup "3D creation tools" cat."3d";
 
     selected = lib.mkOption {
       type = lib.types.listOf lib.types.attrs;

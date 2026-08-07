@@ -1,5 +1,5 @@
 {
-  description = "nixcreative — declarative creative tool selection for creation workflows (audio editing, image editing, video editing).";
+  description = "nixcreative — declarative creative tool selection for creation workflows (DAW, vector, raster, 3D).";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
