@@ -2,6 +2,25 @@ let
   inherit (builtins) mapAttrs;
 in
 {
+  # ── DAW ─────────────────────────────────────────────────────────────────────────────────────
+  #
+  # DELIBERATELY EMPTY. A digital audio workstation belongs HERE and not in nixrecord, and the
+  # reasoning is the one this repo's gate already states: a DAW authors material whose result is not
+  # specified before the work starts -- two people at the same session file produce two different
+  # records -- whereas nixrecord captures an event that happened. Recording a take is capture;
+  # arranging, mixing and mastering it is not.
+  #
+  # The second reason is structural, and it is why this must not drift into nixrecord later: nixrecord
+  # is single-host BECAUSE OF AN ENCODER (only one machine in this estate has an AV1 hardware
+  # encoder). Anything filed there inherits that constraint permanently. Authoring is not
+  # encoder-bound, so binding a DAW to one machine would be an accident of hardware, not a decision.
+  #
+  # The operator has ruled that NO DAW is wanted at present -- Ardour, Reaper and LMMS were all
+  # considered and declined. The group exists so that the ruling is recorded where the next addition
+  # would be made, rather than argued again from scratch. Adding one here needs no new group and no
+  # new boundary; it needs a decision.
+  daw = { };
+
   audio = {
     audacity = {
       arch = "audacity";

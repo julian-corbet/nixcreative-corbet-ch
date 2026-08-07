@@ -80,7 +80,7 @@ in
 
   config = {
     nixcreative.selected = selected;
-    nixcreative.archPackages = lib.unique (map (t: t.arch) (lib.filter (t: !(t.aur or false)) selected);
+    nixcreative.archPackages = lib.unique (map (t: t.arch) (lib.filter (t: !(t.aur or false)) selected));
     nixcreative.aurPackages = lib.unique (map (t: t.arch) (lib.filter (t: t.aur or false) selected));
     nixcreative.nixosPackages = lib.unique (map (t: t.nixpkgs) (lib.filter (t: t.nixpkgs != null) selected));
     nixcreative.unavailableOnNixos = lib.unique (map (t: t.arch) (lib.filter (t: t.nixpkgs == null) selected));
