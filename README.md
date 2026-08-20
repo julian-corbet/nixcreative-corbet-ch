@@ -1,14 +1,15 @@
 # nixcreative
 
-**The tools you sit inside, declared — and anything that could have been a job runs on the cluster
-instead.**
+**The tools you sit inside, declared — and the generative work that cannot be a package, declared
+as a workload.**
 
 Two things make this repo harder to bound than its siblings, and the whole README is about them.
 The first is that "creative" borders three catalogues at once: watching, capturing, and making are
 three different repos in this family, and the line between them is not the medium. The second is
-that the heavy end of generative work already runs as a cluster service on a shared GPU — so
-"generative content" is a subject this repo shares with a machine it must never try to configure.
-Left undefined, that phrase swallows the cluster whole.
+that the heavy end of generative work runs on a shared GPU rather than on a desk — so this repo has
+**two planes**, a package plane and a cluster plane, and the rule that decides which one a tool
+lands on is gate 2 below. Left undefined, "generative content" swallows the cluster whole; defined,
+it splits cleanly, and both halves are this repo's.
 
 ## "Experimental" is the right word for this repo
 
@@ -85,9 +86,12 @@ The two rules agree on every case; this one just also answers the case where the
 
 ### Gate 2 — does the tool's working set include model weights?
 
-Yes → the cluster, as a service recipe ([nixapps][nixapps], scheduled against the card by
-[nixgpu][nixgpu]). Never a package here, no matter how the weights were delivered. This is the gate
-that keeps "generative content" from swallowing the cluster, and it gets its own section below.
+Yes → the cluster, as a workload declared by **this repo's own cluster plane**
+(`modules/cluster.nix`, scheduled against the card by [nixgpu][nixgpu]). Never a package here, no
+matter how the weights were delivered. Gate 2 changes the PLANE, never the OWNER: generative media
+is this repo's subject wherever it runs, and the reason the tool leaves the package catalogue is
+that a package manager cannot finish installing a model — not that it stopped being creative. It
+gets its own section below.
 
 ### Worked examples
 
@@ -103,8 +107,8 @@ Decidable rather than argued, including the cases that look like they go the oth
 | a GUI transcoder driven by presets | display default | **same file for anyone** | — | [nixmedia][nixmedia], which files it under format-shift |
 | a perceptual duplicate finder | display default | **it finds; it decides nothing** | — | not here — it authors nothing. Already a [nixapps][nixapps] recipe. |
 | a stylus note-taker | display default | your hand | no weights | **[nixoffice][nixoffice], already** — see below |
-| an image-generation front-end | display default | your hand, genuinely | **needs weights** | cluster, as a service |
-| a desktop AI upscaler with bundled models | display default | your hand | **needs weights, even bundled** | cluster — see below |
+| an image-generation front-end | display default | your hand, genuinely | **needs weights** | **here, on the cluster plane** |
+| a desktop AI upscaler with bundled models | display default | your hand | **needs weights, even bundled** | the cluster plane — see below |
 | `ffmpeg`, `chafa`, `timg`, an image-processing CLI | **no display default** | — | — | [nixsh][nixsh] |
 | a colour-management or RAW-decoding library | it has no user at all | — | — | not a catalogue entry here; it is a dependency, or the preview pipeline's |
 
@@ -128,13 +132,14 @@ not encoder-bound, only export is — was raised and settled the other way. This
 already at work for the stylus note-taker, just decided on structure rather than on precedence: a
 gate that admits a tool is not a claim on a tool another catalogue already owns.
 
-## Gate 2 in full: the cluster owns anything with weights
+## Gate 2 in full: anything with weights is a workload, not a package
 
 The heavy end of generative work — image and video model inference — runs on the cluster, which
 owns the shared card. Gate 2 is not a capacity argument, and it is not "batch there, interactive
 here". An image-generation front-end is driven by hand, iteration by iteration, exactly like the
 editors in this catalogue; the operator really does sit in that loop, and by gate 1 alone it would
-belong here. The overlap is real and this repo does not pretend otherwise.
+belong here. The overlap is real, and gate 2 resolves it without sending the tool anywhere else:
+the tool stays this repo's and changes plane.
 
 What gate 2 separates is the **deliverable**, and the line is sharp: *a package manager can finish
 installing a raster editor. It cannot finish installing a model.*
@@ -161,11 +166,51 @@ one desktop package with its models inside: one package name, no service, a GUI 
 It looks like it passes. It does not — the second copy and the unmanaged tenant are both still
 there, just hidden inside a package. Gate 2 asks what the tool *needs*, not how it was delivered.
 
-**What is left here is not a consolation prize.** It is the entire local half of a generative
-session: the raster editor you take the output into, the vector tool you build the input mask in,
-the RAW developer whose export becomes the reference. The generator is a service you call — it
-reaches this host as a URL, not as a package. The tools you finish the work in are packages, and
-they are these.
+**Neither half is a consolation prize.** The package catalogue is the entire local half of a
+generative session: the raster editor you take the output into, the vector tool you build the input
+mask in, the RAW developer whose export becomes the reference. The generator reaches this host as a
+URL rather than as a package — and the thing that serves that URL is declared by the cluster
+catalogue below, in the same repo, on the other plane.
+
+### The cluster plane
+
+`lib/applications.nix` is the cluster catalogue and `modules/cluster.nix` is the translator that
+turns a declaration into an app in the [nixk3s][nixk3s] grammar. It renders no Kubernetes object of
+its own: the grammar owns the Application, the Namespace, the Deployment and the Service, and this
+repo supplies the one thing the grammar cannot know — what these applications *are*.
+
+The same knowledge/value split as the package plane, enforced rather than trusted. The catalogue
+holds what is true of the software wherever anyone runs it: the port, the directories it reads and
+writes, whether it burns a graphics device, whether it authenticates anybody, how patient a probe
+has to be. A declaration holds what is true of one cluster: what backs each directory, which
+namespace, how far it is exposed, which version. Neither can supply the other's half, and the guards
+say so — backing a directory the application does not use, leaving one it does use unbacked, putting
+weights on a node path that gets created empty, or overriding the argument that routes renders into
+the directory you backed are all eval errors rather than surprises at runtime.
+
+**The card is a need, never an allocation.** The catalogue records that a workload puts work on a
+graphics device. What the cluster calls that device, how many exist, who yields it and in what order
+are four fleet facts, and not one of them is expressible here — the grammar underneath refuses to
+render a device request until the site has named its own resource.
+
+```nix
+{
+  imports = [ inputs.nixk3s.nixidyModules.apps inputs.nixcreative.nixidyModules.default ];
+
+  nixcreative.clusterPlatform = { namespace = "…"; project = "…"; };
+
+  nixcreative.applications.graphs = {
+    app = "comfyui";
+    version = "…";
+    exposure = "nb";
+    scaling = "scale-to-zero";
+    wake = "sablier";
+    state.models.hostPath = "…";                                     # weights, must already exist
+    state.home = { hostPath = "…"; hostPathType = "DirectoryOrCreate"; };
+    state.output.hostPath = "…";                                     # where renders land
+  };
+}
+```
 
 ## Where this lives, and the card it shares
 
@@ -215,7 +260,10 @@ delivery step done elsewhere with hardware, never at capture time.
   is brushes, palettes, workspace layout and window state — the residue of using it, an output of
   the work rather than an input to a machine build. Declaring it would fight the tool every time a
   brush changed.
-- **Model weights and anything that needs them.** Gate 2. The store is the cluster's.
+- **Model weights themselves.** The shared store — where checkpoints live, how they are versioned,
+  who else reads them — is the cluster's, not this repo's; the cluster catalogue names the directory
+  a workload mounts them at and never what is in it. The *workload* that needs them is this repo's,
+  on the cluster plane. Gate 2 moves the plane, not the owner.
 - **The GPU itself** — driver stack, arbitration, VRAM policy, VA-API drivers. [nixgpu][nixgpu]
   owns all of it, keyed to silicon rather than to a host class.
 - **Audio routing.** A patchbay or graph controller is the audio fabric's, not a creative tool;
@@ -286,14 +334,21 @@ So the same names do not come back:
 
 ## Status
 
-**The code matches the rule above.** `lib/creative.nix` carries exactly the four entries in *What's
-declared*, one per group (`daw`, `vector`, `raster`, `3d`); `modules/nixcreative.nix` resolves a
-selection into `archPackages` / `aurPackages` / `nixosPackages` / `unavailableOnNixos`, and the two
-backends (`modules/nixos.nix`, `modules/arch.nix`) plus the home-manager backend
-(`home/nixcreative.nix`) install from those lists. `nix-instantiate --parse` is clean on every file
-in the repo, and `nix flake check --all-systems` is green, including
-`checks/catalogue-eval.nix`'s namespaced selection and eval-time rejection tests for all four
-groups.
+**The code matches the rule above, on both planes.** On the package plane `lib/creative.nix`
+carries exactly the four entries in *What's declared*, one per group (`daw`, `vector`, `raster`,
+`3d`); `modules/nixcreative.nix` resolves a selection into `archPackages` / `aurPackages` /
+`nixosPackages` / `unavailableOnNixos`, and the two backends (`modules/nixos.nix`,
+`modules/arch.nix`) plus the home-manager backend (`home/nixcreative.nix`) install from those lists.
+On the cluster plane `lib/applications.nix` carries one entry — the node-graph image generator —
+and `modules/cluster.nix` translates a declaration into an app in the [nixk3s][nixk3s] grammar.
+
+`nix flake check` is green. `checks/catalogue-eval.nix` covers the package plane's namespaced
+selection and eval-time rejection for all four groups, on every supported system.
+`checks/cluster-eval.nix` renders the example surface through the real grammar and makes every
+guard fire on a declaration that must be refused; `checks/cluster-render.nix` reads the promises
+back off the rendered YAML rather than off the options that produced it. Those two are declared for
+`x86_64-linux` only, on purpose: each BUILDS a nixidy environment, and a platform that cannot be
+built is a check `nix flake check` skips while exiting 0.
 
 `experiments/` and `studies/` are still empty: the `pacman -Si` and forcing-nixpkgs-evaluation
 verification behind the table above has not yet been captured as a reproducible experiment in this
@@ -301,8 +356,9 @@ repo.
 
 ## Usage
 
-The same shape as every catalogue in this family: a platform-neutral policy module plus two
-backends, selecting nothing by default.
+On the package plane, the same shape as every catalogue in this family: a platform-neutral policy
+module plus two backends, selecting nothing by default. (The cluster plane's usage is in *The
+cluster plane* above.)
 
 ```nix
 {
@@ -332,11 +388,14 @@ reconciler:
 
 | Path | Purpose |
 |---|---|
-| `flake.nix` | Flake entry point: `nixosModules.default` (NixOS install), `systemManagerModules.default` (Arch publish), `lib.catalogue`, and `checks`. |
-| `lib/creative.nix` | The catalogue — one entry per selected tool, platform-specific package names, and comments recording why each was chosen over the alternatives it was chosen against. |
+| `flake.nix` | Flake entry point: `nixosModules.default` (NixOS install), `systemManagerModules.default` (Arch publish), `nixidyModules.default` (the cluster plane), `lib.catalogue`, `lib.applications`, and `checks`. Its `nixidy` and `nixk3s` inputs are used by the checks alone — a host importing the package modules pulls in neither. |
+| `lib/creative.nix` | The package catalogue — one entry per selected tool, platform-specific package names, and comments recording why each was chosen over the alternatives it was chosen against. |
+| `lib/applications.nix` | The cluster catalogue — what each cluster-side application IS: its port, the directories it reads and writes, whether it burns a graphics device, whether it authenticates anybody, how patient its probe has to be. No address, no node, no namespace, no device name. |
+| `modules/cluster.nix` | The translator into the [nixk3s][nixk3s] app grammar. Renders no Kubernetes object of its own; every guard it adds is about the half a declaration must supply and the catalogue cannot. |
+| `examples/all/values.nix` | Placeholder values the cluster checks render from. Nothing in it is real. |
 | `modules/nixcreative.nix` | Policy: selection groups and the resolved `archPackages` / `aurPackages` / `nixosPackages` / `unavailableOnNixos` lists. |
 | `modules/nixos.nix`, `modules/arch.nix` | The two backends. The NixOS one force-evaluates every nixpkgs attribute before trusting it (`tryEval`, never a bare existence check — a renamed attribute in nixpkgs becomes a *throwing* alias, which `?` accepts). |
-| `checks/` | `nix flake check`-wired proof that selection and resolution are wired correctly — module evaluation, not a package build. |
+| `checks/` | `nix flake check`-wired proof for both planes: `catalogue-eval.nix` for selection and resolution (module evaluation, not a package build), `cluster-eval.nix` for what the cluster module resolves and refuses, `cluster-render.nix` for what actually comes out as YAML. |
 | `experiments/` | Reproducible verification of every catalogued package name against a real pacman database and a real nixpkgs revision. |
 | `studies/` | Findings from those experiments that changed how the catalogue was shaped. |
 
@@ -356,9 +415,9 @@ Part of the same independently-usable NixOS module family. Gate 1 draws its boun
 (capture of the real world — light and sound, plus video editing by ruling; never a digital
 interface, which is owned by whichever repo owns that interface); gate 0 sends everything
 terminal-shaped to [nixsh][nixsh], including several tools that look like they belong here. Gate 2
-points at [nixapps][nixapps] (self-hosted
-application recipes, where a model server is declared) and [nixgpu][nixgpu] (which arbitrates the
-one card all of this shares). [nixoffice][nixoffice], [nixaudio][nixaudio], [nixfont][nixfont] and
+does not point at another repo at all — it points at this one's other plane, which is declared
+against the [nixk3s][nixk3s] app grammar and scheduled against the card by [nixgpu][nixgpu] (which
+arbitrates the one card all of this shares). [nixoffice][nixoffice], [nixaudio][nixaudio], [nixfont][nixfont] and
 [nixdesktop][nixdesktop] own the neighbouring subjects named above, and [nixarch][nixarch] is the
 Arch host reconciler the `systemManagerModules` backend publishes into.
 
@@ -367,6 +426,7 @@ Arch host reconciler the `systemManagerModules` backend publishes into.
 [nixsh]: https://github.com/julian-corbet/nixsh-corbet-ch
 [nixapps]: https://github.com/julian-corbet/nixapps-corbet-ch
 [nixgpu]: https://github.com/julian-corbet/nixgpu-corbet-ch
+[nixk3s]: https://github.com/julian-corbet/nixk3s-corbet-ch
 [nixoffice]: https://github.com/julian-corbet/nixoffice-corbet-ch
 [nixaudio]: https://github.com/julian-corbet/nixaudio-corbet-ch
 [nixfont]: https://github.com/julian-corbet/nixfont-corbet-ch
