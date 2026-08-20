@@ -18,7 +18,8 @@
 #     therefore carries no version at all, stays resident, reads its weights read-only out of an
 #     existing claim instead of off a node — which is the other backing, and the one the existence
 #     guard deliberately cannot check — and renames one volume to the name an object it stands in
-#     for already carries.
+#     for already carries — and, because that object was already running, is ADOPTED rather than
+#     created, which is the one term in this file that changes the Application rather than the pod.
 #
 # The other two are the voice tier, in a SECOND namespace of its own, and they are here because
 # between them they are the only place several branches are taken at all:
@@ -97,6 +98,13 @@
     image = "registry.example.com/example-org/example-graphs:0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000";
     exposure = "internal";
     slot = 13;
+
+    # TAKING OVER AN OBJECT THAT IS ALREADY RUNNING, which is the only place the two halves of this
+    # branch can be read off rendered bytes: this Application asks for server-side apply and diff,
+    # and the three declarations around it — none of which sets it — ask for neither. Nothing
+    # about the application changed; what changed is that one cluster already had a Deployment of
+    # it and the others did not.
+    adopt = true;
 
     state.models = {
       claim = "example-weights";

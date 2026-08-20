@@ -225,6 +225,23 @@ pkgs.runCommand "nixcreative-cluster-render"
   check "cloning reference" "/app/reference_audio" "$(y '.spec.template.spec.containers[0].volumeMounts[1].mountPath' $cloning)"
   check "cloning voices"    "/app/voices"          "$(y '.spec.template.spec.containers[0].volumeMounts[2].mountPath' $cloning)"
 
+  echo "== adoption is a term of the delivery object, and only the workload that claims it carries it =="
+  # THE ONLY THING IN THIS MODULE THAT CHANGES THE APPLICATION RATHER THAN THE POD, which is why it
+  # is read off the Application files and not the Deployments above. BOTH directions are asserted:
+  # a term that renders something everywhere is indistinguishable from a term nothing reads.
+  studio_app="$manifests/apps/Application-example-studio.yaml"
+  graphs_app="$manifests/apps/Application-example-graphs.yaml"
+  check "studio adopts: server-side apply" "ServerSideApply=true" \
+    "$(y '.spec.syncPolicy.syncOptions[0]' $studio_app)"
+  check "studio adopts: server-side diff" "ServerSideDiff=true" \
+    "$(y '.metadata.annotations."argocd.argoproj.io/compare-options"' $studio_app)"
+  # An ABSENT syncOptions and an ABSENT annotation. A default that quietly started rendering would
+  # put every workload on server-side apply, which on a live cluster is a diff nobody asked for.
+  check "graphs does not adopt: no sync option" "null" "$(y '.spec.syncPolicy.syncOptions' $graphs_app)"
+  check "graphs does not adopt: no compare option" "null" "$(y '.metadata.annotations' $graphs_app)"
+  check "the voice tier does not adopt either" "null" \
+    "$(y '.spec.syncPolicy.syncOptions' $manifests/apps/Application-example-narration.yaml)"
+
   echo "== sleeping is the device tenant's, and the resident half keeps its replica =="
   check "cloning replicas unset (the wake front owns it)" "null" "$(y '.spec.replicas' $cloning)"
   check "narration replicas" "1" "$(y '.spec.replicas' $narration)"

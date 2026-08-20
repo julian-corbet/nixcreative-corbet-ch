@@ -200,7 +200,7 @@ let
   mkApp = x:
     let inherit (x) entry w; in
     {
-      inherit (w) namespace createNamespace project exposure scaling resources;
+      inherit (w) namespace createNamespace project exposure scaling resources adopt;
       inherit (entry) gpu;
       image = imageOf entry w;
       ports = portsOf entry;
@@ -624,6 +624,32 @@ let
         is where that is enforced: the first request has to be held until the pod actually holds the
         card and be answered by the application itself, because a front that admits it earlier turns
         "the device is busy" into an error at the edge.
+      '';
+    };
+
+    adopt = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Whether this workload is TAKING OVER an object that already runs in the cluster, rather
+        than creating one. Renders the Application with server-side apply and server-side diff.
+
+        A DECLARATION'S TERM AND NOT THE CATALOGUE'S, for a reason worth stating: whether a
+        Deployment of this application already exists is that cluster's history, not a fact about
+        the software. The same application adopted on one cluster and created fresh on another
+        differs here and in nothing else, so the catalogue has nothing to say about it.
+
+        WHY IT MATTERS MORE HERE THAN ELSEWHERE. A rendered spec is never byte-identical to the
+        YAML it replaces, the delivery layer sees that difference and acts on it, and for these
+        applications acting on it is not a pod restart: durable directories force `Recreate`, so
+        the old pod stops before the new one starts, and a workload holding one non-shareable
+        device then re-runs a cold start measured in minutes. Server-side apply and diff shrink
+        the diff to what genuinely changed instead of a client-side reconstruction of it, which is
+        what makes an in-place adoption possible at all.
+
+        It does not make the diff zero. Before pointing this at a running workload, render it,
+        diff it against what the cluster is serving, and decide knowingly -- which is what
+        `studies/adopting-a-running-workload.md` records having done.
       '';
     };
 

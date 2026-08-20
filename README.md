@@ -239,8 +239,21 @@ render a device request until the site has named its own resource.
 ### Two terms that look like they cross the line, and do not
 
 Adopting an application that is *already running* is where a translator is most tempted to grow an
-escape hatch. Two terms exist for that pressure, and both are split across the line rather than
-handed through it.
+escape hatch.
+
+The adoption itself is one plain term. `adopt = true` on a declaration renders that Application with
+server-side apply and server-side diff, so the delivery layer compares against what the API server
+actually holds rather than against a client-side reconstruction of it. It sits on the **declaration**
+and not in the catalogue for the flattest of reasons: whether a Deployment of this application
+already exists is that cluster's history, not a fact about the software — the same application
+adopted on one cluster and created fresh on another differs here and nowhere else. It shrinks the
+diff; it does not zero it, and for these workloads the difference is not a pod restart, because
+durable directories force `Recreate`: the old pod stops before the new one starts, and one holding
+the card then re-runs a cold start measured in minutes. Render it, diff it against what the cluster
+is serving, and decide knowingly.
+
+Two further terms exist for the pressure adoption puts on the *catalogue*, and both are split across
+the line rather than handed through it.
 
 **A hook point is the image's; what the hook says is not.** Some images source a script off a fixed
 path before they start. That the path exists, which of the application's own directories it lives
