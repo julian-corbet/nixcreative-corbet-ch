@@ -14,3 +14,4 @@ usually rediscover the expensive way.
 |---|---|
 | [`voice-model-survey.md`](voice-model-survey.md) | the whole shape of `lib/voices.nix`: which fields exist, which deliberately do not, and why `commercialUse` is a judgement with a mandatory caveat rather than a boolean |
 | [`catalogue-verification.md`](catalogue-verification.md) | how both verification scripts resolve a name, and why the NixOS backend forces an attribute instead of testing for it |
+| [`adopting-a-running-workload.md`](adopting-a-running-workload.md) | `state.<name>.volumeName` and `hook` exist at all, `version` stopped being a required option, and the list of fields that deliberately stay in a consumer's own overlay |
