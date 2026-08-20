@@ -36,6 +36,7 @@ command -v nix >/dev/null || { echo "needs nix" >&2; exit 2; }
 catalogue=$(nix eval --json "$root#lib.voices") || exit 2
 
 fail=0
+throttled=0
 note() { printf '  %-12s %s\n' "$1" "$2"; }
 
 for key in $(jq -r 'keys[]' <<<"$catalogue"); do
@@ -59,8 +60,6 @@ for key in $(jq -r 'keys[]' <<<"$catalogue"); do
       # being the one anybody should write down.
       id=$(jq -r '.id // ""' <<<"$body")
       [ "$id" = "$repo" ] || { note "ID MOVED" "catalogued $repo, API answers $id"; fail=1; }
-
-      tag=$(jq -r '.cardData.license // .tags[]? | select(type=="string")' <<<"$body" | head -1)
       lic=$(jq -r '.cardData.license // ""' <<<"$body")
       note "licence tag" "${lic:-<none>}"
       if [ -n "$spdx" ] && [ -n "$lic" ]; then
@@ -115,7 +114,21 @@ for key in $(jq -r 'keys[]' <<<"$catalogue"); do
     if jq -e 'has("pushed_at")' >/dev/null 2>&1 <<<"$gh"; then
       note "upstream" "pushed $(jq -r '.pushed_at' <<<"$gh"), archived=$(jq -r '.archived' <<<"$gh")"
     else
-      note "upstream" "not readable: $(jq -r '.message // "unknown"' <<<"$gh")"
+      msg=$(jq -r '.message // "unknown"' <<<"$gh")
+      case "$msg" in
+        *"rate limit"*|*"Rate limit"*)
+          # THROTTLED IS NOT AN OBSERVATION, and printing it like one is how this script would come
+          # to report nothing while looking like it reported something. The unauthenticated GitHub
+          # quota is 60/hour and this loop spends one request per model, so a second run inside the
+          # hour silently degrades EVERY upstream line to a shrug. Counted as a failure of the run,
+          # not of the catalogue -- the distinction is in the wording and in the summary below.
+          note "upstream" "NOT CHECKED (GitHub rate limit) -- this run establishes nothing about upstreams"
+          throttled=1
+          ;;
+        *)
+          note "UPSTREAM UNREADABLE" "$msg"; fail=1
+          ;;
+      esac
     fi
   fi
 done
@@ -124,6 +137,17 @@ if [ "$fail" -ne 0 ]; then
   echo
   echo "at least one catalogued fact no longer matches its source -- read the lines in capitals" >&2
   exit 1
+fi
+
+# A CLEAN RUN THAT CHECKED NOTHING IS NOT A CLEAN RUN. Exit 3 rather than 0, so a caller -- a human
+# reading the last line, or anything that ever wires this into CI -- cannot mistake "nothing
+# disagreed" for "everything was compared". Distinct from 1 (a fact moved) and 2 (the tool could not
+# start), because the remedy is different: wait an hour, or set GH_TOKEN.
+if [ "$throttled" -ne 0 ]; then
+  echo
+  echo "the weights all matched, but GitHub throttled this run: NO upstream was checked." >&2
+  echo "re-run in an hour, or with a token, before treating the upstream half as verified." >&2
+  exit 3
 fi
 echo
 echo "every catalogued model still matches the source it was read from"

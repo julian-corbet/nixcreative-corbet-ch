@@ -119,6 +119,13 @@
       # against A100 baselines, which is the claim being made rather than an aside.
       needsGpu = false;
 
+      # FALSE FOR THE OPEN WEIGHTS, and the distinction is the whole reason this field is not a
+      # summary of the product. The card says the open-weight package "includes fixed preset voice
+      # styles for immediate local inference" and then points anyone wanting "zero-shot custom voice
+      # styles" at the vendor's hosted studio. So the capability exists in the product and does not
+      # ship in what you can run here. A reader who takes `false` as "this family cannot clone"
+      # would be wrong; a reader who takes it as "you cannot clone with these weights" is right, and
+      # that is what every field in this catalogue means.
       voiceCloning = false;
 
       licence = {
@@ -607,6 +614,15 @@
       # NOT ESTABLISHED. See `unverified` below.
       needsGpu = null;
 
+      # HEDGED IN THE SOURCE, so it is hedged here. The card does not say Bark cannot clone; it says
+      # "it is not straightforward to voice clone known people with Bark" while warning the model
+      # can still be misused. That is a statement about difficulty, not capability, and there is no
+      # documented reference-audio path in the released package -- what it ships is a fixed set of
+      # speaker presets.
+      #
+      # Recorded as false because no supported cloning interface exists in the open release, NOT
+      # because the card denies it. If that distinction ever matters to a decision, read the card
+      # rather than this field.
       voiceCloning = false;
 
       licence = {
