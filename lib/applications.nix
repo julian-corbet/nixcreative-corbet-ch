@@ -32,6 +32,13 @@
 # `null`, and the translator refuses a declaration that does not carry a whole one. That is the
 # knowledge/value split reaching the least obvious field rather than an omission.
 #
+# A HOOK POINT IS THE IMAGE'S, AND ITS CONTENT IS NOT. `hook` describes a path an image reads
+# before it starts, the directory that path lives in, and the reason a read-only projection cannot
+# be mounted there -- three facts about a packaging, true of it wherever anyone runs it. It carries
+# no script, no ConfigMap name and no installer image: what the hook SAYS is content, and content is
+# not vocabulary. A deployment that wants one names the object holding it and the image that copies
+# it into place, and the translator builds the container. `null` means the image reads no such path.
+#
 # WHICH MODEL A WORKLOAD SERVES, in `serves`, keyed into `lib/voices.nix`. It is empty for a tool
 # that runs whatever weights a deployment installs into it, and it names one for an application
 # that IS a model's server -- where the model is what the image was built around rather than
@@ -104,6 +111,34 @@
       # `modules/cluster.nix` for what it refuses.
       outputState = "output";
 
+      # THE HOOK POINT THIS PACKAGING SOURCES ON EVERY START, in a shape a translator can render
+      # rather than only in prose. Every field of it is true of the software wherever anyone runs
+      # it: the image is what reads this path, the image is what makes it executable before sourcing
+      # it, and the directory it lives in is one this catalogue already names. What the hook SAYS,
+      # and which utility image copies it into place, are a deployment's and arrive from there.
+      #
+      # WHY THE FILE CANNOT SIMPLY BE PROJECTED ONTO THAT PATH, which is the fact that makes this a
+      # term instead of a comment. A projected volume is read-only with no override; the entrypoint
+      # runs `chmod +x` on the hook before sourcing it; that fails on a read-only projection and,
+      # under the entrypoint's own `set -e`, aborts startup before the application ever runs. The
+      # file has to be COPIED onto the writable directory named below, which is a container that
+      # runs to completion before the application starts.
+      hook = {
+        # WHAT THE IMAGE CALLS IT. The volume that carries the content, the container that installs
+        # it, and the directory that container reads it from are all named off this one word, so a
+        # deployment never spells any of the three.
+        name = "pre-start";
+
+        # WHERE THE IMAGE LOOKS. Inside `home` below, which is precisely why that is the directory
+        # written to and why the hook survives a restart at all.
+        path = "/root/user-scripts/pre-start.sh";
+
+        # WHICH of this application's directories that path lives in, by `state` key -- so the
+        # installer writes onto the volume a declaration already backs, rather than onto a second
+        # one nothing keeps.
+        state = "home";
+      };
+
       # NO NAMED MODEL, and that is a fact about this application rather than a gap. A node graph
       # runs whatever checkpoints, LoRAs and VAEs a deployment put in the directory above; the model
       # set is CONTENT, it changes on a Tuesday afternoon, and a catalogue of it would be one
@@ -168,8 +203,10 @@
         is present, which is the generic answer to a problem custom nodes create: a node cloned
         straight into `custom_nodes/` gets no dependency install, because installing dependencies
         is the in-app node manager's job and a git clone never asked it. That path is INSIDE the
-        `home` directory above, so a deployment that wants the hook writes it there -- nothing in
-        this repository plants one, because a hook is content and content is not vocabulary.
+        `home` directory above, which is why `hook` names that directory: the file has to land on a
+        volume something backs, or it is gone at the next restart. This repository still plants no
+        hook and never will -- what the script SAYS is content, and content is not vocabulary. It
+        describes the point, and a deployment names the object that fills it.
 
         A ROCM TRAP THAT COSTS AN AFTERNOON: several widely-used custom nodes list `onnxruntime-gpu`
         unconditionally in their requirements, with a marker that checks the machine architecture
@@ -241,6 +278,11 @@
       # NOWHERE. Audio leaves as the response to the request that asked for it; nothing is written
       # for later, so there is no product directory to route work into and no argument to protect.
       outputState = null;
+
+      # NO HOOK POINT. Nothing in this image reads a script off a path before starting, so there is
+      # no place a deployment could plant one and nothing for a translator to install. `null` is the
+      # fact rather than an empty shape.
+      hook = null;
 
       # NOBODY. The API takes a key-shaped field for compatibility with a well-known interface and
       # enforces nothing behind it, so anything that can open the port can spend the CPU.
@@ -323,6 +365,9 @@
       # that wanted generated files kept would be asking for a directory this catalogue does not
       # describe, and that is a change here rather than a value there.
       outputState = null;
+
+      # NO HOOK POINT, same as the CPU half: the serving stack reads no start-up script off disk.
+      hook = null;
 
       # NOBODY. No login, no user model, no token -- and on this application that is a sharper
       # problem than on the graph editor above, because what an open port buys is the ability to

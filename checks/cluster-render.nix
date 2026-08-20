@@ -100,6 +100,43 @@ pkgs.runCommand "nixcreative-cluster-render"
   check "graphs image" "yanwk/comfyui-boot:0.0.0" "$(y '.spec.template.spec.containers[0].image' $graphs)"
   check "studio digest-pinned" "true" "$(y '.spec.template.spec.containers[0].image' $studio | grep -q '@sha256:' && echo true || echo false)"
 
+  echo "== the hook is a container and a volume this module BUILT, not one a declaration handed through =="
+  # Every string below is derived. The catalogue holds the path and the directory it lives in and no
+  # object name; the declaration holds an object name and an image and no path. A declaration that
+  # could have written this container would be a passthrough, and none of these strings appears in
+  # one.
+  check "graphs init containers" "1" "$(y '.spec.template.spec.initContainers | length' $graphs)"
+  check "graphs init name" "pre-start-install" "$(y '.spec.template.spec.initContainers[0].name' $graphs)"
+  check "graphs init image is the declaration's" "true" \
+    "$(y '.spec.template.spec.initContainers[0].image' $graphs | grep -q '^busybox:stable@sha256:' && echo true || echo false)"
+  # COPIED AND MADE EXECUTABLE. The image runs `chmod +x` on this file before sourcing it, which is
+  # what fails on the read-only projection a ConfigMap volume always is -- so the file has to land
+  # on the writable directory as a plain file, which is why a container exists here at all.
+  check "graphs init copies onto the catalogue's path" \
+    "mkdir -p /root/user-scripts && cp /pre-start-src/pre-start.sh /root/user-scripts/pre-start.sh && chmod +x /root/user-scripts/pre-start.sh" \
+    "$(y '.spec.template.spec.initContainers[0].command[2]' $graphs)"
+  check "graphs init writes onto the durable directory" "/root" \
+    "$(y '.spec.template.spec.initContainers[0].volumeMounts[] | select(.name == "home") | .mountPath' $graphs)"
+  # The application's own container never reads the projection: only the container that installs
+  # from it does, which is exactly the volume a null mountPath exists for.
+  check "graphs app container does not mount the hook" "0" \
+    "$(y '[.spec.template.spec.containers[0].volumeMounts[] | select(.name == "pre-start")] | length' $graphs)"
+  check "graphs hook volume NAMES a ConfigMap" "example-pre-start" \
+    "$(y '.spec.template.spec.volumes[] | select(.name == "pre-start") | .configMap.name' $graphs)"
+  # A name is not a payload. The same proof as the device name and the registry above: the object
+  # name can only have come from the consumer, so it must not be findable in this repository.
+  check "the ConfigMap name is absent from the catalogue" "0" \
+    "$(grep -c 'example-pre-start' ${../lib/applications.nix} || true)"
+  check "studio plants no hook" "null" "$(y '.spec.template.spec.initContainers' $studio)"
+
+  echo "== a rename reaches the manifest and stops there =="
+  check "studio renamed volume lands where the catalogue says" "/images-out" \
+    "$(y '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "example-renders") | .mountPath' $studio)"
+  check "studio carries no volume under the catalogue's key" "0" \
+    "$(y '[.spec.template.spec.volumes[] | select(.name == "output")] | length' $studio)"
+  check "and a workload that renames nothing keeps the catalogue's name" "/images-out" \
+    "$(y '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "output") | .mountPath' $graphs)"
+
   echo "== fifteen minutes of tolerated start, and no guessed liveness probe =="
   check "graphs probe period"  "5"   "$(y '.spec.template.spec.containers[0].readinessProbe.periodSeconds' $graphs)"
   check "graphs probe budget"  "180" "$(y '.spec.template.spec.containers[0].readinessProbe.failureThreshold' $graphs)"

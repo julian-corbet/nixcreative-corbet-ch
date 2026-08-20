@@ -27,6 +27,21 @@
 # and only a declaration can say WHAT BACKS IT, so a workload whose weights live on a node path is
 # refused when nothing backs it rather than quietly rendered onto a pod's ephemeral filesystem.
 #
+# TWO TERMS THAT LOOK LIKE THEY CROSS THE LINE AND DO NOT. `hook` is one need split across both
+# halves: an image reads a script off a path before it starts (knowledge -- the path, the directory
+# it lives in, and why a read-only projection mounted there aborts startup), and a deployment names
+# the object holding the script and the image that copies it (values -- an object name and a
+# registry reference, neither of which is a fact about the software). What this module builds out of
+# the two is a volume and an init container; neither side wrote a pod spec, and neither could have.
+#
+# `state.<name>.volumeName` is the other, and it is narrower than it looks: it renames a volume IN
+# THE MANIFEST and nothing else. Where the directory lives inside the container stays the
+# catalogue's, so this cannot become a second vocabulary for the same directories -- it exists
+# because a volume name is a manifest identifier rather than a fact, and renaming one on a live
+# workload rewrites the pod template for the sake of a word. The catalogue still chooses names so
+# that a parent sorts before the directory nested inside it, and a rename that inverts such a pair
+# is warned about rather than quietly taken.
+#
 # THE DEVICE IS THE SHARPEST CASE OF THE SPLIT. The catalogue says the process puts work on a
 # graphics device. It does not say what the cluster calls that device, how many exist, or who
 # yields it -- those are four fleet facts, they live wherever the fleet is described, and the
@@ -67,16 +82,23 @@ let
   # past it cannot render a pod with an empty image.
   imageOf = entry: w:
     if w.image != null then w.image
-    else if entry.image != null then "${entry.image}:${w.version}"
+    else if entry.image != null && w.version != null then "${entry.image}:${w.version}"
     else throw "nixcreative: no image reference -- the catalogue publishes none and the declaration supplies none";
 
   portsOf = entry: lib.mapAttrs (_: number: { inherit number; }) entry.ports;
 
+  # WHAT A VOLUME IS CALLED IN THE MANIFEST, which is not the same question as what the directory
+  # IS. The catalogue's key is the name and the default; a declaration overrides it for exactly one
+  # reason -- a live object already carries a different one, and a rename is a rollout. It reaches
+  # the manifest and nothing else: the path inside the container stays the catalogue's, so this
+  # cannot become a second, competing vocabulary for the same directories.
+  volumeNameOf = key: backing: if backing.volumeName != null then backing.volumeName else key;
+
   # The split in one function: WHERE inside the container comes from the catalogue, WHAT BACKS IT
   # comes from the declaration, and neither side can supply the other's half.
   stateOf = entry: w:
-    lib.mapAttrs
-      (key: backing: {
+    lib.mapAttrs'
+      (key: backing: lib.nameValuePair (volumeNameOf key backing) {
         # `or null` rather than a raw attribute error: a declaration that backs a directory this
         # application does not use is a real mistake with a real message below, and a Nix
         # "attribute missing" thrown from inside the renderer is not that message.
@@ -84,6 +106,70 @@ let
         inherit (backing) claim hostPath hostPathType readOnly;
       })
       w.state;
+
+  # ── The hook point ────────────────────────────────────────────────────────────────────────────
+  #
+  # The catalogue says an image reads a script off a path before it starts, which of the
+  # application's own directories that path lives in, and why a read-only projection mounted there
+  # aborts startup instead of working. A declaration says which object holds the script and which
+  # image copies it. What comes out is a VOLUME and a CONTAINER this module builds -- neither side
+  # wrote a pod spec, and neither could have: the catalogue has no object names and the declaration
+  # has no paths.
+  #
+  # The catalogue's one word names all three things a manifest needs a name for, so a declaration
+  # never spells a container, a volume or a scratch mount path.
+  hookOf = entry: w:
+    if entry.hook == null || w.hook.configMap == null then null
+    else
+      let
+        h = entry.hook;
+        source = "/${h.name}-src";
+        key = baseNameOf h.path;
+      in
+      rec {
+        volume = h.name;
+        installer = "${h.name}-install";
+        inherit source key;
+
+        # COPIED AND MADE EXECUTABLE, which is the whole reason a container exists here rather than
+        # a mount: the image runs `chmod +x` on this file before sourcing it, and that is what fails
+        # on the read-only projection the ConfigMap would otherwise be.
+        command = lib.concatStringsSep " && " [
+          "mkdir -p ${builtins.dirOf h.path}"
+          "cp ${source}/${key} ${h.path}"
+          "chmod +x ${h.path}"
+        ];
+
+        # The durable volume it writes onto, under whatever name this deployment's manifest calls
+        # it, mounted at the catalogue's own path for that directory.
+        onto = {
+          name =
+            if w.state ? ${h.state}
+            then volumeNameOf h.state w.state.${h.state}
+            else h.state;
+          mountPath = entry.state.${h.state} or null;
+        };
+      };
+
+  hookVolumeOf = entry: w:
+    let h = hookOf entry w; in
+    lib.optionalAttrs (h != null) {
+      # NAMED, never carried: the ConfigMap's content is a file's text, and nothing in this
+      # repository can hold one. Nothing here creates the object either.
+      ${h.volume}.configMap = w.hook.configMap;
+    };
+
+  hookInitOf = entry: w:
+    let h = hookOf entry w; in
+    lib.optional (h != null) {
+      name = h.installer;
+      image = w.hook.installerImage;
+      command = [ "sh" "-c" h.command ];
+      mounts = {
+        ${h.onto.name} = [{ mountPath = h.onto.mountPath; }];
+        ${h.volume} = [{ mountPath = h.source; }];
+      };
+    };
 
   probesOf = entry:
     lib.optionalAttrs (entry.readiness != null) {
@@ -118,13 +204,19 @@ let
       inherit (entry) gpu;
       image = imageOf entry w;
       ports = portsOf entry;
-      state = stateOf entry w;
+      # The hook's volume is one this module builds, not one a declaration backs, so it is added
+      # AFTER the guard that says every catalogued directory must be backed and no other may be.
+      state = stateOf entry w // hookVolumeOf entry w;
       secrets = secretsOf w;
       env = envOf entry w;
       args = argsOf entry w;
       probes = probesOf entry;
     }
     // lib.optionalAttrs (w.wake != null) { inherit (w) wake; }
+    # A LIST, and it stays one: the kubelet runs init containers in written order, so for them the
+    # order is the semantics. One entry today, and anything this module ever adds below it runs
+    # after it.
+    // lib.optionalAttrs (hookInitOf entry w != [ ]) { init = hookInitOf entry w; }
     // addressingOf w;
 
   # ── Assertions ────────────────────────────────────────────────────────────────────────────────
@@ -217,7 +309,16 @@ let
   imageAssertions = lib.concatMap
     (x:
       let inherit (x) name w entry; in
-      lib.optional (entry.image == null) {
+      lib.optional (entry.image != null)
+        {
+          assertion = w.image != null || w.version != null;
+          message =
+            "nixcreative: application `${name}` states neither a version nor a whole image reference. The "
+            + "catalogue publishes the repository and never a tag -- which version to run is a deployment's "
+            + "choice and there is no default anybody could pick, because a moving tag on a workload this "
+            + "slow to start is two syncs of one tree running different code.";
+        }
+      ++ lib.optional (entry.image == null) {
         assertion = w.image != null;
         message =
           "nixcreative: application `${name}` has no image reference anybody publishes -- upstream ships a "
@@ -245,6 +346,73 @@ let
             + "Catalogued models: " + lib.concatStringsSep ", " (lib.attrNames voices) + ".";
         })
         entry.serves)
+    workloads;
+
+  # THE GUARD FOR TWO DIRECTORIES ON ONE MANIFEST NAME. Renaming a volume is how a declaration
+  # matches a live object, and two renames that land on one word is not a merge: the later one
+  # silently replaces the earlier, and the application comes up with a directory mounted where
+  # another one belongs. The hook's own volume is counted here too, because it is a name in the
+  # same space even though no declaration wrote it.
+  volumeNameAssertions = lib.concatMap
+    (x:
+      let
+        inherit (x) name w entry;
+        h = hookOf entry w;
+        names = lib.mapAttrsToList volumeNameOf w.state
+          ++ lib.optional (h != null) h.volume;
+        duplicated = lib.unique (lib.filter (n: lib.count (m: m == n) names > 1) names);
+      in
+      [
+        {
+          assertion = duplicated == [ ];
+          message =
+            "nixcreative: application `${name}` puts more than one volume on the manifest name "
+            + lib.concatMapStringsSep ", " (n: "`${n}`") duplicated
+            + ". A volume name is a key: the second definition replaces the first rather than joining "
+            + "it, so one of the directories is mounted where another one belongs.";
+        }
+        {
+          # A volume name is an RFC 1123 label to Kubernetes. A value that is not one is not
+          # refused by anything between here and the API server, so a rename typed to match a live
+          # object would render happily and be rejected at apply.
+          assertion = lib.all (n: builtins.match "[a-z0-9]([-a-z0-9]*[a-z0-9])?" n != null) names;
+          message =
+            "nixcreative: application `${name}` renames a volume to something Kubernetes will not accept "
+            + "as a name. A volume name is a lowercase DNS label -- letters, digits and dashes, starting "
+            + "and ending with a letter or a digit. Nothing between here and the API server refuses it, "
+            + "so the manifest renders and the apply fails.";
+        }
+      ])
+    workloads;
+
+  # THE GUARD FOR A HOOK NOBODY ASKED FOR, AND FOR HALF OF ONE. The catalogue decides whether an
+  # application HAS a hook point -- an image either reads a path before it starts or it does not --
+  # so a deployment that names a ConfigMap for an application with none is describing something that
+  # would be copied onto a path nothing ever reads. And a hook is two values or it is none: a script
+  # with nothing to copy it, or a copier with nothing to copy, renders a container that does nothing
+  # or no container at all, silently either way.
+  hookAssertions = lib.concatMap
+    (x:
+      let inherit (x) name w entry;h = w.hook; in
+      [
+        {
+          assertion = (h.configMap == null) == (h.installerImage == null);
+          message =
+            "nixcreative: application `${name}` names only half of a hook -- "
+            + (if h.configMap == null then "an installer image with no ConfigMap to copy from"
+            else "a ConfigMap with no image to copy it")
+            + ". Both or neither: one alone renders a workload that starts without the hook and says "
+            + "nothing about it.";
+        }
+        {
+          assertion = h.configMap == null || entry.hook != null;
+          message =
+            "nixcreative: application `${name}` supplies a hook, and its catalogue entry has no hook "
+            + "point -- nothing in that image reads a script off a path before it starts, so the file "
+            + "would be copied onto a path nobody looks at. Whether an image has such a point is "
+            + "knowledge and lives in `lib/applications.nix`.";
+        }
+      ])
     workloads;
 
   # A namespace outlives every workload in it, so exactly one thing may own it. Two anchors is not a
@@ -304,6 +472,47 @@ let
               + "whether this deployment is commercial is not something this repository can see.";
           })
         entry.serves)
+    workloads;
+
+  # THE WARNING FOR A RENAME THAT INVERTS A NESTED PAIR. The catalogue names these directories so
+  # that a parent sorts before the child it contains -- mounts are emitted in attribute-name order,
+  # and a shallower mount emitted last covers the deeper one inside it. A rename is free to break
+  # that, because a live object's names were not chosen with it in mind; what a rename may not do is
+  # break it QUIETLY. It warns rather than refuses because the runtime the manifest lands on decides
+  # whether the emitted order is the runtime order, and which runtime that is, is not visible here.
+  #
+  # THE GRAMMAR UNDERNEATH WARNS ABOUT THE SYMPTOM -- a mount emitted before the mount that covers
+  # it -- and it tells the reader to rename the volume keys. From here that advice is unfollowable:
+  # the keys are the catalogue's and a consumer does not own them. This names the CAUSE instead, on
+  # the only line that could have been written differently.
+  nestingWarnings = lib.concatMap
+    (x:
+      let
+        inherit (x) name w entry;
+        landed = lib.mapAttrsToList
+          (key: backing: { vol = volumeNameOf key backing; path = entry.state.${key} or null; })
+          w.state;
+        inverted = lib.concatMap
+          (parent: lib.concatMap
+            (child:
+              lib.optional
+                (parent.path != null && child.path != null
+                  && lib.hasPrefix "${parent.path}/" child.path
+                  && child.vol < parent.vol)
+                "`${child.vol}` (${child.path}) is emitted before `${parent.vol}` (${parent.path})")
+            landed)
+          landed;
+      in
+      lib.optional (inverted != [ ]) {
+        when = true;
+        message =
+          "nixcreative: application `${name}` renames a volume so that a directory is emitted before the "
+          + "one it lives inside: "
+          + lib.concatStringsSep "; " inverted
+          + ". The catalogue's own names sort the parent first for exactly this reason. Kubernetes does "
+          + "not promise to reorder mounts, so either pin the order where these objects are rendered or "
+          + "keep the catalogue's names.";
+      })
     workloads;
 
   warnings = lib.concatMap
@@ -458,6 +667,29 @@ let
               weights other tenants read.
             '';
           };
+
+          volumeName = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "legacy-volume-name";
+            description = ''
+              WHAT THIS VOLUME IS CALLED IN THE RENDERED MANIFEST, when that has to be something
+              other than the name above. Defaults to the catalogue's key, which is the vocabulary
+              and the right answer for anything rendered for the first time.
+
+              IT EXISTS FOR ONE CASE: an object that is already running. A volume name is a manifest
+              identifier rather than a fact about the software, and renaming one on a live workload
+              rewrites the pod template -- which for an application that holds a device and takes
+              minutes to start is a real outage, in exchange for a word. So a deployment adopting an
+              existing object states the name that object has, and everything else about the
+              directory still comes from the catalogue: the path inside the container is not
+              overridable here, and cannot become a second vocabulary for the same directories.
+
+              THE NAMES ARE NOT ONLY LABELS. The catalogue chooses them so that a parent directory
+              sorts before a directory nested inside it; a rename that inverts such a pair is
+              warned about rather than silently accepted.
+            '';
+          };
         };
       });
     };
@@ -521,6 +753,59 @@ let
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = "Arguments appended to whatever the catalogue sets.";
+    };
+
+    hook = lib.mkOption {
+      default = { };
+      description = ''
+        WHAT FILLS THE HOOK POINT the catalogue describes, for an application that has one -- a path
+        its image reads a script off before it starts.
+
+        TWO VALUES AND NO THIRD, and the pair is the whole term: the object that holds the script,
+        and the image that copies it into place. Both are one deployment's facts. Which ConfigMap a
+        cluster keeps a start-up script in is that cluster's object; which small image an operator
+        trusts to run `cp` in their own pod is that operator's choice, and a public repository
+        picking one would be choosing what runs in somebody else's cluster.
+
+        NEITHER IS CONTENT. A name is not a payload: nothing here carries the script's text, which
+        is what keeps a declaration written against this module publishable, and nothing here
+        creates the ConfigMap either -- render it beside the application, where the consumer's own
+        resources are.
+
+        WHAT COMES OUT is a volume and an init container, both named off the one word the catalogue
+        gives the hook. A declaration spells no container name, no scratch mount path and no copy
+        command, because none of those are its half.
+
+        Leaving it out plants no hook, which is a legitimate deployment: these applications start
+        without one, and the catalogue says what that costs.
+      '';
+      type = lib.types.submodule {
+        options = {
+          configMap = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "example-pre-start";
+            description = ''
+              NAME of an existing ConfigMap holding the script under the hook file's own name.
+              Nothing here creates it and nothing here can carry what is in it.
+            '';
+          };
+
+          installerImage = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "busybox:stable@sha256:0000000000000000000000000000000000000000000000000000000000000000";
+            description = ''
+              The image that copies the script out of the projection onto the durable directory and
+              makes it executable. A shell and nothing else, and WHICH shell is a deployment's.
+
+              Pin it by digest, for a sharper reason than usual: this container runs before an
+              application whose cold start is measured in minutes, so a moving tag here is a
+              failure that happens once, on a wake nobody was watching.
+            '';
+          };
+        };
+      };
     };
 
     image = lib.mkOption {
@@ -592,6 +877,10 @@ in
           state.home = { hostPath = "/example/state/graphs"; hostPathType = "DirectoryOrCreate"; };
           state.output.hostPath = "/example/renders";
           env.HSA_OVERRIDE_GFX_VERSION = "0.0.0";
+          hook = {
+            configMap = "example-pre-start";
+            installerImage = "busybox:stable@sha256:0000...";
+          };
         };
       }
     '';
@@ -603,8 +892,19 @@ in
         };
 
         version = lib.mkOption {
-          type = lib.types.str;
-          description = "Which version this workload runs, used as the image tag. Required, and defaulted nowhere.";
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = ''
+            Which version this workload runs, used as the tag on the catalogue's repository. Defaulted
+            NOWHERE -- a floating tag is not a version anybody picked, and on a workload whose cold
+            start is measured in minutes it is a debugging session nobody can reproduce.
+
+            `null` is not "whatever is latest": it is the statement that this workload's image does
+            not come from a repository plus a tag. It is the right value in exactly two cases, and
+            both are refused if the declaration does not then carry a whole `image` reference -- one
+            where the deployment pins by digest, and one where the catalogue publishes no repository
+            at all because nobody ships a runnable container of that application.
+          '';
         };
       };
     }));
@@ -682,7 +982,8 @@ in
     nixk3s.apps = lib.listToAttrs (map (x: lib.nameValuePair x.name (mkApp x)) workloads);
     nixidy.assertions =
       stateAssertions ++ existenceAssertions ++ outputAssertions ++ imageAssertions
-      ++ servesAssertions ++ anchorAssertions ++ slotAssertions;
-    nixidy.warnings = warnings ++ licenceWarnings;
+      ++ servesAssertions ++ anchorAssertions ++ slotAssertions
+      ++ volumeNameAssertions ++ hookAssertions;
+    nixidy.warnings = warnings ++ licenceWarnings ++ nestingWarnings;
   };
 }

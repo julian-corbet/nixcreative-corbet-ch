@@ -206,13 +206,14 @@ render a device request until the site has named its own resource.
 
   nixcreative.applications.graphs = {
     app = "comfyui";
-    version = "…";
+    version = "…";                                                   # or a whole `image`, never neither
     exposure = "nb";
     scaling = "scale-to-zero";
     wake = "sablier";
     state.models.hostPath = "…";                                     # weights, must already exist
     state.home = { hostPath = "…"; hostPathType = "DirectoryOrCreate"; };
     state.output.hostPath = "…";                                     # where renders land
+    hook = { configMap = "…"; installerImage = "…"; };               # fills the image's start-up hook
   };
 
   nixcreative.applications.narration = {
@@ -223,8 +224,8 @@ render a device request until the site has named its own resource.
 
   nixcreative.applications.cloning = {
     app = "chatterbox";                                              # burns the card
-    version = "…";
     image = "…";                                                     # required: nobody publishes one
+                                                                     # (and no `version`: nothing to hang one on)
     scaling = "scale-to-zero";
     wake = "sablier";
     state.cache = { hostPath = "…"; hostPathType = "DirectoryOrCreate"; };
@@ -234,6 +235,33 @@ render a device request until the site has named its own resource.
   };
 }
 ```
+
+### Two terms that look like they cross the line, and do not
+
+Adopting an application that is *already running* is where a translator is most tempted to grow an
+escape hatch. Two terms exist for that pressure, and both are split across the line rather than
+handed through it.
+
+**A hook point is the image's; what the hook says is not.** Some images source a script off a fixed
+path before they start. That the path exists, which of the application's own directories it lives
+in, and why a read-only projection mounted there aborts start-up instead of working, are three facts
+about a packaging — they are in `lib/applications.nix`, as `hook`. Which object holds the script and
+which small image copies it into place are one deployment's — they are `hook.configMap` and
+`hook.installerImage` on the declaration. Neither half is a pod spec, and neither could be: the
+catalogue has no object names and the declaration has no paths. What the translator builds out of
+the two is a volume and an init container, with every string in it derived — the container's name,
+the scratch mount path and the copy command are never spelled by anybody. An application whose image
+reads no such path has `hook = null`, and supplying one to it is refused.
+
+**A volume's manifest name is not a fact about the software.** The catalogue names directories for
+what they *are*, and chooses those names so that a parent sorts before the directory nested inside
+it — mounts are emitted in attribute-name order, and a shallower mount emitted last covers the
+deeper one it contains. A live object, though, already carries whatever names it was born with, and
+renaming a volume on a running workload rewrites the pod template for the sake of a word. So
+`state.<name>.volumeName` renames a volume **in the manifest and nowhere else**: where the directory
+lands inside the container stays the catalogue's, which is what stops this becoming a second
+vocabulary for the same directories. A rename that inverts a nested pair warns rather than passing
+quietly, because the constraint the catalogue's own names encode is still true after the rename.
 
 ### The voice tier
 
@@ -261,6 +289,12 @@ repository is knowledge and a declaration names the version. Where nobody does �
 ships a build recipe written against one vendor's compute runtime and every operator builds their
 own — there is no reference this repository could state. `image` is `null`, and a declaration
 without a whole reference is refused rather than rendered with a version hanging off nothing.
+
+That is also why `version` is **not** a required option, and is defaulted nowhere either. A
+workload pinned by digest has nothing for a tag to hang on, and one whose catalogue entry publishes
+no repository could never use a tag at all — demanding a version there would be demanding a value
+nobody can supply honestly, which is how `version = "unused"` gets written into a real declaration.
+Saying *neither* a version nor a whole reference is the actual mistake, and that is the guard.
 
 **`mustExist` is for directories where empty is the whole problem, and it stays silent otherwise.**
 The graph editor's weights directory must already exist: auto-created and empty, it is a workload

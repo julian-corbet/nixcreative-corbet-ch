@@ -8,8 +8,8 @@
 # the wrong reason.
 #
 # SOME OF THE REFUSALS ARE NOT GUARDS AT ALL. Naming an application the catalogue does not hold,
-# leaving out the version, saying a workload needs the card, and saying where inside the container
-# a directory lives all fail as a type error or an unknown option -- not as assertions. That is the
+# saying a workload needs the card, and saying where inside the container a directory lives all fail
+# as a type error or an unknown option -- not as assertions. That is the
 # stronger kind: a boundary nobody has to remember, because it is unwritable rather than refused.
 # `tryEval` cannot tell those apart from a guard, so the ones that ARE guards additionally have
 # their message asserted by content.
@@ -84,6 +84,81 @@ let
       && goodCfg.nixk3s.apps.example-studio.state.models.mountPath == "/root/ComfyUI/models"
       && goodCfg.nixk3s.apps.example-studio.state.models.claim == "example-weights";
 
+    # THE CATALOGUE'S OWN SHAPE, asserted where the translator reads it. Every entry answers every
+    # question this module asks, including the ones whose honest answer is "none" -- an entry that
+    # simply omitted `hook` would not be a workload without a hook point, it would be an attribute
+    # error thrown from inside the renderer, on a path nobody was looking at.
+    "every catalogued application answers every question the translator asks of it" =
+      let
+        catalogue = (import ../lib/applications.nix { }).applications;
+        asked = [
+          "image"
+          "ports"
+          "primaryPort"
+          "gpu"
+          "state"
+          "mustExist"
+          "outputState"
+          "hook"
+          "serves"
+          "authenticates"
+          "env"
+          "args"
+          "readiness"
+          "note"
+        ];
+      in
+      lib.all (e: lib.all (f: e ? ${f}) asked) (lib.attrValues catalogue);
+
+    # ── The hook point, built out of both halves ──────────────────────────────────────────────
+    #
+    # NEITHER SIDE COULD HAVE WRITTEN THIS CONTAINER. The catalogue holds the path, the directory it
+    # lives in and the reason a projection cannot be mounted there, and holds no object name and no
+    # image; the declaration holds an object name and an image, and holds no path. What comes out is
+    # a container and a volume, and every string in it is derived rather than restated.
+    "the hook's container is named off the catalogue's one word, and never spelled by a declaration" =
+      let init = goodCfg.nixk3s.apps.example-graphs.init; in
+      lib.length init == 1 && (lib.head init).name == "pre-start-install";
+
+    "its image is the declaration's, and nothing here picks one" =
+      (lib.head goodCfg.nixk3s.apps.example-graphs.init).image
+      == "busybox:stable@sha256:2222222222222222222222222222222222222222222222222222222222222222";
+
+    "it copies the catalogue's path and makes it executable, because a projection cannot be chmodded" =
+      (lib.head goodCfg.nixk3s.apps.example-graphs.init).command == [
+        "sh"
+        "-c"
+        ("mkdir -p /root/user-scripts && cp /pre-start-src/pre-start.sh /root/user-scripts/pre-start.sh"
+        + " && chmod +x /root/user-scripts/pre-start.sh")
+      ];
+
+    "and it writes onto the durable directory the catalogue named, at the catalogue's own path" =
+      # Read as paths rather than as whole mount records: the grammar's mount type carries defaults
+      # this module never states, and comparing against them would be asserting its schema, not ours.
+      lib.mapAttrs (_: ms: map (m: m.mountPath) ms)
+        (lib.head goodCfg.nixk3s.apps.example-graphs.init).mounts == {
+        home = [ "/root" ];
+        pre-start = [ "/pre-start-src" ];
+      };
+
+    "the ConfigMap is NAMED and never carried, on a volume no application container reads" =
+      goodCfg.nixk3s.apps.example-graphs.state.pre-start.configMap == "example-pre-start"
+      && goodCfg.nixk3s.apps.example-graphs.state.pre-start.mountPath == null;
+
+    "a workload that plants no hook renders no container for one, rather than an empty list of them" =
+      goodCfg.nixk3s.apps.example-studio.init == [ ]
+      && !(goodCfg.nixk3s.apps.example-studio.state ? pre-start);
+
+    # ── The manifest-name seam ────────────────────────────────────────────────────────────────
+    "a rename reaches the manifest and stops there: the path inside the container is still the catalogue's" =
+      goodCfg.nixk3s.apps.example-studio.state ? example-renders
+      && goodCfg.nixk3s.apps.example-studio.state.example-renders.mountPath == "/images-out"
+      && !(goodCfg.nixk3s.apps.example-studio.state ? output);
+
+    "and a workload that renames nothing carries the catalogue's names unchanged" =
+      lib.sort (a: b: a < b) (lib.attrNames goodCfg.nixk3s.apps.example-graphs.state)
+      == [ "home" "models" "output" "pre-start" ];
+
     "needing the card is a catalogue fact, and it reaches the grammar as one" =
       goodCfg.nixk3s.apps.example-graphs.gpu
       && goodCfg.nixk3s.apps.example-studio.gpu;
@@ -149,15 +224,6 @@ let
     "an application the catalogue does not hold is not a value this option has" =
       !renders (with' { nixcreative.applications.example-graphs.app = "nonesuch"; });
 
-    "a workload with no version is refused, because a floating tag is not a default anyone can pick" =
-      !renders {
-        nixidy.target.repository = "https://example.com/x.git";
-        nixidy.target.branch = "main";
-        nixk3s.appPlatform.gpuResourceName = "example.com/example-device";
-        nixcreative.clusterPlatform = { namespace = "x"; project = "x"; };
-        nixcreative.applications.x = { app = "comfyui"; };
-      };
-
     "a declaration cannot say that a workload needs the card -- that is not one of its options" =
       !renders (with' { nixcreative.applications.example-graphs.gpu = false; });
 
@@ -165,6 +231,18 @@ let
       !renders (with' { nixcreative.applications.example-graphs.state.models.mountPath = "/elsewhere"; });
 
     # ── The guards, each with its message asserted ────────────────────────────────────────────
+    # A VERSION AND A WHOLE REFERENCE ARE TWO WAYS TO SAY ONE THING, and saying neither is the
+    # mistake. It is a guard rather than a required option because for a workload pinned by digest,
+    # and for one whose catalogue entry publishes no repository at all, a version has nothing to
+    # hang on -- so demanding one there would be demanding a value nobody can supply honestly.
+    "a workload with neither a version nor a whole reference is refused" =
+      failsWith "states neither a version nor a whole image reference"
+        (lib.recursiveUpdate base { nixcreative.applications.example-graphs.version = lib.mkForce null; });
+
+    "and a whole reference alone renders, with nothing invented to stand in for a version" =
+      goodCfg.nixk3s.apps.example-studio.image
+      == "registry.example.com/example-org/example-graphs:0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
     "backing a directory the application does not use is refused" =
       failsWith "must back every directory it uses"
         (with' { nixcreative.applications.example-studio.state.nowhere.hostPath = "/example/nope"; });
@@ -207,6 +285,27 @@ let
       failsWith "is claimed by 2 applications"
         (with' { nixcreative.applications.example-studio.slot = 12; });
 
+    "supplying a hook to an application whose image reads no such path is refused" =
+      failsWith "has no hook point"
+        (with' {
+          nixcreative.applications.example-narration.hook = {
+            configMap = "example-pre-start";
+            installerImage = "busybox:stable@sha256:2222222222222222222222222222222222222222222222222222222222222222";
+          };
+        });
+
+    "half a hook is refused, because one half alone starts the workload without it and says nothing" =
+      failsWith "names only half of a hook"
+        (with' { nixcreative.applications.example-studio.hook.configMap = "example-pre-start"; });
+
+    "two directories renamed onto one manifest name is refused" =
+      failsWith "more than one volume on the manifest name"
+        (with' { nixcreative.applications.example-studio.state.home.volumeName = "example-renders"; });
+
+    "a rename the API server would reject as a name is refused here rather than at apply" =
+      failsWith "lowercase DNS label"
+        (with' { nixcreative.applications.example-studio.state.home.volumeName = "Example_Renders"; });
+
     # ── The warnings that are not refusals ────────────────────────────────────────────────────
     # Both of these are real mistakes and neither is an eval error, for the same reason: what makes
     # them mistakes is something one deployment can see and this repository cannot.
@@ -218,9 +317,18 @@ let
       let v = with' { nixcreative.applications.example-studio.exposure = "public"; }; in
       warnsWith "authenticates nobody" v && renders v;
 
+    # THE CATALOGUE'S NAMES CARRY A CONSTRAINT, not just a vocabulary: a parent sorts before the
+    # directory nested inside it, because a shallower mount emitted last covers the deeper one. A
+    # rename is allowed to break that -- a live object's names were not chosen with it in mind --
+    # and is not allowed to break it quietly.
+    "a rename that puts a directory before the one it lives inside warns" =
+      warnsWith "is emitted before"
+        (with' { nixcreative.applications.example-graphs.state.home.volumeName = "root"; });
+
     "and neither warning fires on the example surface itself" =
       !(warnsWith "nothing brings it back" base)
-      && !(warnsWith "authenticates nobody" base);
+      && !(warnsWith "authenticates nobody" base)
+      && !(warnsWith "is emitted before" base);
   };
 
   failed = lib.filter (n: !results.${n}) (lib.attrNames results);

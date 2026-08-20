@@ -12,11 +12,13 @@
 # both halves of every branch:
 #
 #   - one that anchors a namespace, takes its image as a repository plus a version, sleeps behind a
-#     wake front, backs every directory on a node path, and adds the environment a particular piece
-#     of silicon needs;
-#   - one that joins that namespace rather than creating a second one, is pinned by digest, stays
-#     resident, reads its weights read-only out of an existing claim instead of off a node — which
-#     is the other backing, and the one the existence guard deliberately cannot check.
+#     wake front, backs every directory on a node path, fills the hook point its catalogue entry
+#     describes, and adds the environment a particular piece of silicon needs;
+#   - one that joins that namespace rather than creating a second one, is pinned by digest and
+#     therefore carries no version at all, stays resident, reads its weights read-only out of an
+#     existing claim instead of off a node — which is the other backing, and the one the existence
+#     guard deliberately cannot check — and renames one volume to the name an object it stands in
+#     for already carries.
 #
 # The other two are the voice tier, in a SECOND namespace of its own, and they are here because
 # between them they are the only place several branches are taken at all:
@@ -73,6 +75,16 @@
     resources.limits.memory = "2Gi";
 
     envFromSecrets = [ "example-graphs-env" ];
+
+    # THE HOOK POINT FILLED, which is the case the term exists for: the catalogue says this image
+    # reads a script off a path before it starts and why that file cannot simply be projected there,
+    # and this names the object that holds the script and the image that copies it onto the writable
+    # directory. Neither value is content and neither is knowledge — both are invented here like
+    # everything else in this file.
+    hook = {
+      configMap = "example-pre-start";
+      installerImage = "busybox:stable@sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    };
   };
 
   # Joins the namespace above rather than anchoring a second one, and carries a whole reference so
@@ -80,7 +92,8 @@
   # mounted read-only: a shared model store this deployment reads and may not alter.
   nixcreative.applications.example-studio = {
     app = "comfyui";
-    version = "0.0.0";
+    # NO VERSION, and its absence is the statement: this workload's image is not a repository plus a
+    # tag, so there is nothing for one to hang on. A declaration carrying neither is refused.
     image = "registry.example.com/example-org/example-graphs:0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000";
     exposure = "internal";
     slot = 13;
@@ -93,7 +106,14 @@
       hostPath = "/example/state/studio";
       hostPathType = "DirectoryOrCreate";
     };
-    state.output.hostPath = "/example/renders-studio";
+    # THE ADOPTION SEAM, on the one workload here that is pretending to be an object that already
+    # exists: the catalogue calls this directory `output` and this manifest has always called the
+    # volume something else. The rename reaches the manifest and stops there — where the directory
+    # lands inside the container is still the catalogue's, and still `/images-out`.
+    state.output = {
+      volumeName = "example-renders";
+      hostPath = "/example/renders-studio";
+    };
   };
 
   # ── The voice tier, in a namespace of its own ───────────────────────────────────────────────
@@ -132,7 +152,9 @@
   # without one is refused rather than rendered with a version hanging off nothing.
   nixcreative.applications.example-cloning = {
     app = "chatterbox";
-    version = "0.0.0";
+    # NO VERSION, and here it could never have been used: the catalogue publishes no repository for
+    # this application, so a tag would have nothing to hang on and the whole reference below is the
+    # only image there is.
     image = "registry.example.com/example-org/example-cloning:0.0.0@sha256:1111111111111111111111111111111111111111111111111111111111111111";
     namespace = "example-voice";
     exposure = "nb";
