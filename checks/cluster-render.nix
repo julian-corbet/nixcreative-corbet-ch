@@ -24,12 +24,14 @@ pkgs.runCommand "nixcreative-cluster-render"
   }
   y() { yq -r "$1" "$2"; }
 
-  echo "== the environment renders both workloads and nothing else =="
+  echo "== the environment renders every declared workload and nothing else =="
   rendered=$(ls "$manifests" | sort | tr '\n' ' ' | sed 's/ $//')
-  check "rendered apps" "apps example-graphs example-studio" "$rendered"
+  check "rendered apps" "apps example-cloning example-graphs example-narration example-studio" "$rendered"
 
   graphs="$manifests/example-graphs/Deployment-example-graphs.yaml"
   studio="$manifests/example-studio/Deployment-example-studio.yaml"
+  narration="$manifests/example-narration/Deployment-example-narration.yaml"
+  cloning="$manifests/example-cloning/Deployment-example-cloning.yaml"
 
   echo "== the catalogue's port reaches every container, and no declaration stated one =="
   check "graphs port" "8188" "$(y '.spec.template.spec.containers[0].ports[0].containerPort' $graphs)"
@@ -114,11 +116,81 @@ pkgs.runCommand "nixcreative-cluster-render"
   # `-L` is load-bearing: the rendered tree is SYMLINKS into the store, so a plain `-type f`
   # matches nothing and returns a confident zero. A count that can only ever be zero is worse than
   # no check, because it passes the moment somebody expects zero.
-  echo "== exactly one workload anchors the shared namespace, and only one =="
-  check "namespaces rendered" "1" "$(find -L $manifests -name 'Namespace-*.yaml' -type f | wc -l)"
+  echo "== each namespace is anchored by exactly one workload, and the others join it =="
+  check "namespaces rendered" "2" "$(find -L $manifests -name 'Namespace-*.yaml' -type f | wc -l)"
   check "which namespace"    "example-generative" \
     "$(y '.metadata.name' $manifests/example-graphs/Namespace-example-generative.yaml)"
   check "studio joined it"   "example-generative" "$(y '.metadata.namespace' $studio)"
+  check "voice namespace"    "example-voice" \
+    "$(y '.metadata.name' $manifests/example-narration/Namespace-example-voice.yaml)"
+  check "cloning joined it"  "example-voice" "$(y '.metadata.namespace' $cloning)"
+
+  echo "== THE AXIS THE TIER IS SPLIT ON, read off the bytes: one half asks for the device =="
+  # This is the pair the whole two-workload split exists for. Everything else about them is alike --
+  # an HTTP API, durable directories, no login -- and none of it would tell a scheduler which one is
+  # the expensive one. An ABSENT label and an ABSENT resource are the assertion here: a catalogue
+  # entry that quietly gained a device would render both of these as present.
+  check "narration is not labelled a device tenant" "null" "$(y '.metadata.labels."nixk3s.dev/gpu"' $narration)"
+  check "narration requests no device" "null" \
+    "$(y '.spec.template.spec.containers[0].resources.requests."example.com/example-device"' $narration)"
+  check "narration has no device ceiling" "null" \
+    "$(y '.spec.template.spec.containers[0].resources.limits."example.com/example-device"' $narration)"
+  check "cloning is labelled a device tenant" "true" "$(y '.metadata.labels."nixk3s.dev/gpu"' $cloning)"
+  check "cloning requests the device once" "1" \
+    "$(y '.spec.template.spec.containers[0].resources.requests."example.com/example-device"' $cloning)"
+  check "cloning holds one container" "1" "$(y '.spec.template.spec.containers | length' $cloning)"
+  # And the cheap half pays in what it actually costs, which is cores.
+  check "narration asks for cores" "500m" \
+    "$(y '.spec.template.spec.containers[0].resources.requests.cpu' $narration)"
+
+  echo "== the catalogue supplies both voice ports, and neither declaration stated one =="
+  check "narration port" "8880" "$(y '.spec.template.spec.containers[0].ports[0].containerPort' $narration)"
+  check "cloning port"   "8004" "$(y '.spec.template.spec.containers[0].ports[0].containerPort' $cloning)"
+
+  echo "== an application nobody publishes an image of gets its whole reference from the declaration =="
+  check "cloning digest-pinned" "true" \
+    "$(y '.spec.template.spec.containers[0].image' $cloning | grep -q '@sha256:' && echo true || echo false)"
+  # The same proof as the device name above, for the same reason: the reference can only have come
+  # from the consumer, so the registry must not be findable in this repository's catalogue.
+  check "cloning registry absent from the catalogue" "0" \
+    "$(grep -c 'registry.example.com' ${../lib/applications.nix} || true)"
+  check "narration image is the catalogue's repository plus a version" "ghcr.io/remsky/kokoro-fastapi-cpu:0.0.0" \
+    "$(y '.spec.template.spec.containers[0].image' $narration)"
+
+  echo "== each probe is the one its own application needs, and neither guesses a liveness probe =="
+  check "narration probe path"   "/health" "$(y '.spec.template.spec.containers[0].readinessProbe.httpGet.path' $narration)"
+  check "narration probe period" "3"       "$(y '.spec.template.spec.containers[0].readinessProbe.periodSeconds' $narration)"
+  check "narration probe budget" "60"      "$(y '.spec.template.spec.containers[0].readinessProbe.failureThreshold' $narration)"
+  # NOT a health path: this server answers 404 there and 200 at the root once its model is loaded.
+  check "cloning probe path"     "/"       "$(y '.spec.template.spec.containers[0].readinessProbe.httpGet.path' $cloning)"
+  check "cloning probe budget"   "120"     "$(y '.spec.template.spec.containers[0].readinessProbe.failureThreshold' $cloning)"
+  check "narration no liveness"  "null"    "$(y '.spec.template.spec.containers[0].livenessProbe' $narration)"
+  check "cloning no liveness"    "null"    "$(y '.spec.template.spec.containers[0].livenessProbe' $cloning)"
+
+  echo "== a card's quirk is the declaration's, and nothing is told where to write a product =="
+  check "cloning card override" "0.0.0" \
+    "$(y '.spec.template.spec.containers[0].env[] | select(.name == "HSA_OVERRIDE_GFX_VERSION") | .value' $cloning)"
+  # Neither voice workload writes a product to disk -- audio leaves as the response to the request
+  # that asked for it -- so there is no output argument to protect and none is invented.
+  check "narration is told nothing at all" "null" "$(y '.spec.template.spec.containers[0].env' $narration)"
+  check "narration has no command line"    "null" "$(y '.spec.template.spec.containers[0].args' $narration)"
+
+  echo "== the directories the voice tier keeps, in the vocabulary the catalogue named =="
+  check "narration mounts one directory" "1" "$(y '.spec.template.spec.containers[0].volumeMounts | length' $narration)"
+  check "narration extra voices" "/app/api/src/models/extra" \
+    "$(y '.spec.template.spec.containers[0].volumeMounts[0].mountPath' $narration)"
+  # Created when missing, and allowed to be: every released voice ships inside the image, so an
+  # empty extra-voices directory is a deployment with no extra voices rather than a broken one.
+  check "narration voices type" "DirectoryOrCreate" \
+    "$(y '.spec.template.spec.volumes[] | select(.name == "voices") | .hostPath.type' $narration)"
+  check "cloning mounts three" "3" "$(y '.spec.template.spec.containers[0].volumeMounts | length' $cloning)"
+  check "cloning cache"     "/app/hf_cache"       "$(y '.spec.template.spec.containers[0].volumeMounts[0].mountPath' $cloning)"
+  check "cloning reference" "/app/reference_audio" "$(y '.spec.template.spec.containers[0].volumeMounts[1].mountPath' $cloning)"
+  check "cloning voices"    "/app/voices"          "$(y '.spec.template.spec.containers[0].volumeMounts[2].mountPath' $cloning)"
+
+  echo "== sleeping is the device tenant's, and the resident half keeps its replica =="
+  check "cloning replicas unset (the wake front owns it)" "null" "$(y '.spec.replicas' $cloning)"
+  check "narration replicas" "1" "$(y '.spec.replicas' $narration)"
 
   if [ "$fail" -ne 0 ]; then
     echo "rendered output does not match the tier's promises" >&2

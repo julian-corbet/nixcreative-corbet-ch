@@ -108,6 +108,8 @@ Decidable rather than argued, including the cases that look like they go the oth
 | a perceptual duplicate finder | display default | **it finds; it decides nothing** | — | not here — it authors nothing. Already a [nixapps][nixapps] recipe. |
 | a stylus note-taker | display default | your hand | no weights | **[nixoffice][nixoffice], already** — see below |
 | an image-generation front-end | display default | your hand, genuinely | **needs weights** | **here, on the cluster plane** |
+| a voice cloner | display default | your reference sample, your take | **needs weights** | **here, on the cluster plane** |
+| a stock-voice speech synthesiser | display default | your text, your voice, your take — **the closest call in this table** | **needs weights** | **here, on the cluster plane** — see *The voice tier* |
 | a desktop AI upscaler with bundled models | display default | your hand | **needs weights, even bundled** | the cluster plane — see below |
 | `ffmpeg`, `chafa`, `timg`, an image-processing CLI | **no display default** | — | — | [nixsh][nixsh] |
 | a colour-management or RAW-decoding library | it has no user at all | — | — | not a catalogue entry here; it is a dependency, or the preview pipeline's |
@@ -179,6 +181,9 @@ turns a declaration into an app in the [nixk3s][nixk3s] grammar. It renders no K
 its own: the grammar owns the Application, the Namespace, the Deployment and the Service, and this
 repo supplies the one thing the grammar cannot know — what these applications *are*.
 
+Three applications are catalogued: a node-graph image generator, and the two halves of a voice tier
+that are split on the one axis a cluster cares about — *The voice tier* below.
+
 The same knowledge/value split as the package plane, enforced rather than trusted. The catalogue
 holds what is true of the software wherever anyone runs it: the port, the directories it reads and
 writes, whether it burns a graphics device, whether it authenticates anybody, how patient a probe
@@ -209,8 +214,137 @@ render a device request until the site has named its own resource.
     state.home = { hostPath = "…"; hostPathType = "DirectoryOrCreate"; };
     state.output.hostPath = "…";                                     # where renders land
   };
+
+  nixcreative.applications.narration = {
+    app = "kokoro";                                                  # stock voices, no device
+    version = "…";
+    state.voices = { hostPath = "…"; hostPathType = "DirectoryOrCreate"; };
+  };
+
+  nixcreative.applications.cloning = {
+    app = "chatterbox";                                              # burns the card
+    version = "…";
+    image = "…";                                                     # required: nobody publishes one
+    scaling = "scale-to-zero";
+    wake = "sablier";
+    state.cache = { hostPath = "…"; hostPathType = "DirectoryOrCreate"; };
+    state.reference = { hostPath = "…"; hostPathType = "DirectoryOrCreate"; };
+    state.voices = { hostPath = "…"; hostPathType = "DirectoryOrCreate"; };
+    env.HSA_OVERRIDE_GFX_VERSION = "…";                              # one card's quirk
+  };
 }
 ```
+
+### The voice tier
+
+Two of the three catalogued applications are speech synthesis, and they are **two entries rather
+than one** because they differ on the axis that decides everything a cluster does with them: one
+burns the card and one does not.
+
+| | Stock voices | Voice cloning |
+|---|---|---|
+| What it does | you pick a voice from a released set and it reads your text | you give it seconds of reference audio and it speaks in that voice |
+| Device | **none** — a small model, real-time on a CPU reservation | **holds the card**, exactly like the graph editor |
+| Image | a community server image, named in the catalogue | **none anybody publishes** — see below |
+| Durable directories | extra voice packs | a weights cache, the reference audio, the saved voices |
+| Available while the card is busy | yes | no; it *is* the card being busy |
+
+Everything else about them is alike — an HTTP API, a model server, a few directories, no login —
+and none of that would tell a scheduler which of the two is the expensive one. Catalogued as one
+entry, the cheap half would inherit a device it never uses, and the arbitration that decides who
+yields the card would be told about a tenant that was never going to hold it.
+
+Two things this tier taught the translator, both of which apply to anything catalogued later:
+
+**A catalogue entry may have no image.** Where somebody publishes a runnable container, naming its
+repository is knowledge and a declaration names the version. Where nobody does — where upstream
+ships a build recipe written against one vendor's compute runtime and every operator builds their
+own — there is no reference this repository could state. `image` is `null`, and a declaration
+without a whole reference is refused rather than rendered with a version hanging off nothing.
+
+**`mustExist` is for directories where empty is the whole problem, and it stays silent otherwise.**
+The graph editor's weights directory must already exist: auto-created and empty, it is a workload
+that starts, reports ready, and can execute nothing. The voice tier's directories are all filled by
+the running process — a cache by a download, voices and reference clips by an operator — so an
+empty one is a cold start, which is slow and correct. A guard spent on a caution is a guard nobody
+reads.
+
+### Why a voice server passes gate 1, and where it nearly doesn't
+
+This is the closest call in the catalogue and it deserves the argument rather than an assertion.
+Gate 1 asks whether two people at the keyboard, given the same input, produce two different files —
+and a speech synthesiser handed the same text looks uncomfortably like the preset-driven transcoder
+the gate exists to exclude.
+
+It is not one, for two reasons that hold in both halves of the tier:
+
+- **Nothing existed before the tool ran.** [nixmedia][nixmedia]'s own test — did the artifact
+  already exist? — answers cleanly here: a transcode is the same programme in a different
+  container, and an audio file of a voice reading your text is not a container change of anything.
+  There was no recording. The tool made one.
+- **The file records choices, not a specification.** Which voice out of dozens, which phrasing, how
+  the text was rewritten so it would scan when spoken, which take was kept. A preset gives anyone
+  the same file; a voice and a take do not. For the cloning half it is not even close — the
+  reference sample is a judgement in itself.
+
+Where it genuinely stops being this repo's is worth stating, because it is decidable: **fix the
+voice, feed a queue of documents from a script, and walk away.** Now the result is specified before
+the work starts, nobody is in the loop, and by this repo's own first gate that is a job somebody
+queued rather than a tool somebody sat inside. Same software, different act. This catalogue
+describes the interactive one.
+
+## The voice-model catalogue
+
+`lib/voices.nix` says **which speech model** an application serves, and the facts that decide
+whether you can serve it. `lib/applications.nix` says what the software is; this says what it was
+built around.
+
+That second catalogue exists for the voice tier and not for the graph editor, and the line is not
+arbitrary. A node graph runs whatever checkpoints a deployment installed into it: the model set is
+**content**, it changes on a Tuesday afternoon, and a catalogue of it would be one deployment's
+library pretending to be knowledge. Each voice application **is one model's server** — the model is
+what the image was built around, and swapping it means swapping the workload. So `serves` is empty
+for one and names a model for the others, which is the shape of the split rather than a gap.
+
+Twelve models are catalogued, which is deliberately more than anything runs. The question the table
+answers is never "what is deployed" — a declaration answers that — but **"what would we move to,
+and what does moving cost"**. Five facts decide that and they are the only five recorded:
+
+| Field | Why it decides something |
+|---|---|
+| `parameters` | the scale, which is what a device requirement and a cold start both follow from |
+| `needsGpu` | whether serving it costs the one resource everything else is queueing for |
+| `voiceCloning` | whether it can be made to sound like a particular person at all |
+| `licence` + `commercialUse` | whether you may use the output, which no amount of quality overrides |
+| `hfRepo` | where the weights come from — **never** where they land |
+
+**Nothing here downloads anything, and no path to a weight file appears in this repository.** A
+repository id says where weights come *from*; where the file lives on a machine is a value, backed
+through a `state` directory like every other one. `checks/voices-eval.nix` refuses an absolute path
+anywhere in that file so the rule cannot erode.
+
+**The evidence rule is the point of the file.** Every fact was read off a primary source and every
+entry carries the URLs. Where a source does not establish a fact the field is `null` **and** the
+entry names it in `unverified` with what would have to be fetched — enforced in both directions, so
+a fact cannot be dropped quietly and a "we never checked this" note cannot outlive the checking.
+Candidates that could not be established are not in the catalogue at all; they are open questions in
+[`experiments/open-questions.md`](experiments/open-questions.md), because a wrong repository id is
+more expensive than a missing one.
+
+**A licence that does not clearly permit commercial use is recorded as such, loudly.**
+`commercialUse` is a judgement — `yes`, `no`, `conditional` — and anything other than `yes` must
+carry a `caveat` saying what the restriction is. Several catalogued models are non-commercial or
+carry binding use restrictions, and two of them pair an *open-source licence on the code* with a
+*non-commercial licence on the weights*, which is the shape a careful reader still gets wrong. One
+of those carries no licence tag on its repository at all, so anything keying on the tag records it
+as unlicensed and moves on. `nixcreative.voiceLicenceReview` publishes that list from the
+catalogue, before any workload exists, and the module additionally warns when a *declared* workload
+serves such weights — a warning rather than a refusal, because non-commercial use is exactly what
+such a licence is for and whether a given deployment is commercial is not something this repository
+can see.
+
+[`studies/voice-model-survey.md`](studies/voice-model-survey.md) records what surveying those models
+changed, including the one field the survey caused to be **removed**.
 
 ## Where this lives, and the card it shares
 
@@ -263,7 +397,9 @@ delivery step done elsewhere with hardware, never at capture time.
 - **Model weights themselves.** The shared store — where checkpoints live, how they are versioned,
   who else reads them — is the cluster's, not this repo's; the cluster catalogue names the directory
   a workload mounts them at and never what is in it. The *workload* that needs them is this repo's,
-  on the cluster plane. Gate 2 moves the plane, not the owner.
+  on the cluster plane. Gate 2 moves the plane, not the owner. `lib/voices.nix` is not an exception:
+  it names *which model* a workload serves and the repository the weights come from, and never a
+  path, a copy or a download.
 - **The GPU itself** — driver stack, arbitration, VRAM policy, VA-API drivers. [nixgpu][nixgpu]
   owns all of it, keyed to silicon rather than to a host class.
 - **Audio routing.** A patchbay or graph controller is the audio fabric's, not a creative tool;
@@ -272,7 +408,7 @@ delivery step done elsewhere with hardware, never at capture time.
 
 ## The catalogue
 
-`lib/creative.nix` is the single data table; `modules/nixcreative.nix` turns a selection into
+`lib/creative.nix` is the package plane's data table; `modules/nixcreative.nix` turns a selection into
 resolved package lists. Each entry maps a name to a pacman package (`arch`), a nixpkgs attribute
 path (`nixpkgs`), and an `aur` flag (default `false`). `aur` is load-bearing: `pacman -S` fails the
 **whole transaction** on an AUR name with "target not found", taking every unrelated package in the
@@ -339,20 +475,36 @@ carries exactly the four entries in *What's declared*, one per group (`daw`, `ve
 `3d`); `modules/nixcreative.nix` resolves a selection into `archPackages` / `aurPackages` /
 `nixosPackages` / `unavailableOnNixos`, and the two backends (`modules/nixos.nix`,
 `modules/arch.nix`) plus the home-manager backend (`home/nixcreative.nix`) install from those lists.
-On the cluster plane `lib/applications.nix` carries one entry — the node-graph image generator —
-and `modules/cluster.nix` translates a declaration into an app in the [nixk3s][nixk3s] grammar.
+On the cluster plane `lib/applications.nix` carries three entries — the node-graph image generator
+and the voice tier's two halves — `lib/voices.nix` carries the twelve speech models they are chosen
+from, and `modules/cluster.nix` translates a declaration into an app in the [nixk3s][nixk3s]
+grammar.
 
 `nix flake check` is green. `checks/catalogue-eval.nix` covers the package plane's namespaced
 selection and eval-time rejection for all four groups, on every supported system.
+`checks/voices-eval.nix` holds the voice catalogue to its own evidence rule — sources, the
+both-directions `unverified` rule, the mandatory caveat on a restrictive licence, no absolute paths
+— and checks the seam between the two `lib/` catalogues: every model an application serves exists,
+and an application serving a model that requires a device says it burns one. It is pure data, so it
+runs on every supported system too.
+
 `checks/cluster-eval.nix` renders the example surface through the real grammar and makes every
 guard fire on a declaration that must be refused; `checks/cluster-render.nix` reads the promises
-back off the rendered YAML rather than off the options that produced it. Those two are declared for
-`x86_64-linux` only, on purpose: each BUILDS a nixidy environment, and a platform that cannot be
-built is a check `nix flake check` skips while exiting 0.
+back off the rendered YAML rather than off the options that produced it — including the tier's
+defining asymmetry, read as the *absence* of a device request and a device label on the half that
+does not burn the card. Those two are declared for `x86_64-linux` only, on purpose: each BUILDS a
+nixidy environment, and a platform that cannot be built is a check `nix flake check` skips while
+exiting 0.
 
-`experiments/` and `studies/` are still empty: the `pacman -Si` and forcing-nixpkgs-evaluation
-verification behind the table above has not yet been captured as a reproducible experiment in this
-repo.
+`experiments/` and `studies/` are real and are two different things. `experiments/` holds what
+`nix flake check` structurally cannot: `verify-packages.sh` resolves every catalogued package name
+against a real pacman database and a real nixpkgs revision, and `verify-voices.sh` re-checks every
+catalogued model against the hub — canonical id, licence tag, agreement gate, what an anonymous
+fetch actually gets, and whether the upstream is still moving. Both read the catalogue through Nix
+rather than parsing it, both exit non-zero on a disagreement, and neither counts a skip as a pass.
+`experiments/open-questions.md` holds the candidates that could not be established and exactly what
+would settle each. `studies/` holds what running them taught — the findings that shaped a field, a
+guard, or a decision not to have one.
 
 ## Usage
 
@@ -388,16 +540,17 @@ reconciler:
 
 | Path | Purpose |
 |---|---|
-| `flake.nix` | Flake entry point: `nixosModules.default` (NixOS install), `systemManagerModules.default` (Arch publish), `nixidyModules.default` (the cluster plane), `lib.catalogue`, `lib.applications`, and `checks`. Its `nixidy` and `nixk3s` inputs are used by the checks alone — a host importing the package modules pulls in neither. |
+| `flake.nix` | Flake entry point: `nixosModules.default` (NixOS install), `systemManagerModules.default` (Arch publish), `nixidyModules.default` (the cluster plane), `lib.catalogue`, `lib.applications`, `lib.voices`, and `checks`. Its `nixidy` and `nixk3s` inputs are used by the checks alone — a host importing the package modules pulls in neither. |
 | `lib/creative.nix` | The package catalogue — one entry per selected tool, platform-specific package names, and comments recording why each was chosen over the alternatives it was chosen against. |
-| `lib/applications.nix` | The cluster catalogue — what each cluster-side application IS: its port, the directories it reads and writes, whether it burns a graphics device, whether it authenticates anybody, how patient its probe has to be. No address, no node, no namespace, no device name. |
+| `lib/applications.nix` | The cluster catalogue — what each cluster-side application IS: its port, the directories it reads and writes, whether it burns a graphics device, whether it authenticates anybody, how patient its probe has to be, and which model it serves. No address, no node, no namespace, no device name. |
+| `lib/voices.nix` | The voice-model catalogue — which speech model a workload serves, at what scale, needing a device or not, able to clone a voice or not, under which licence and whether that licence permits commercial use, and which repository the weights come from. Every entry carries the sources it was read from; nothing here is a path. |
 | `modules/cluster.nix` | The translator into the [nixk3s][nixk3s] app grammar. Renders no Kubernetes object of its own; every guard it adds is about the half a declaration must supply and the catalogue cannot. |
 | `examples/all/values.nix` | Placeholder values the cluster checks render from. Nothing in it is real. |
 | `modules/nixcreative.nix` | Policy: selection groups and the resolved `archPackages` / `aurPackages` / `nixosPackages` / `unavailableOnNixos` lists. |
 | `modules/nixos.nix`, `modules/arch.nix` | The two backends. The NixOS one force-evaluates every nixpkgs attribute before trusting it (`tryEval`, never a bare existence check — a renamed attribute in nixpkgs becomes a *throwing* alias, which `?` accepts). |
-| `checks/` | `nix flake check`-wired proof for both planes: `catalogue-eval.nix` for selection and resolution (module evaluation, not a package build), `cluster-eval.nix` for what the cluster module resolves and refuses, `cluster-render.nix` for what actually comes out as YAML. |
-| `experiments/` | Reproducible verification of every catalogued package name against a real pacman database and a real nixpkgs revision. |
-| `studies/` | Findings from those experiments that changed how the catalogue was shaped. |
+| `checks/` | `nix flake check`-wired proof for both planes: `catalogue-eval.nix` for selection and resolution (module evaluation, not a package build), `voices-eval.nix` for the voice catalogue's evidence rule and the seam between the two `lib/` catalogues, `cluster-eval.nix` for what the cluster module resolves and refuses, `cluster-render.nix` for what actually comes out as YAML. |
+| `experiments/` | What a check structurally cannot do: resolve a catalogued name against the world. `verify-packages.sh` against a real pacman database and a real nixpkgs revision; `verify-voices.sh` against the model hub. Plus `open-questions.md` — what could not be established, and what would settle it. |
+| `studies/` | Findings from those experiments that changed a field, a guard, or a decision not to have one. |
 
 ## Platform support
 

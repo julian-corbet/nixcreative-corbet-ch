@@ -24,6 +24,19 @@
 # THE GPU IS DECLARED AS A NEED AND NEVER AS AN ALLOCATION. `gpu = true` says the process puts
 # work on a graphics device. What the cluster CALLS that device, how many there are, who yields it
 # and in what order are four different fleet facts, and not one of them is expressible here.
+#
+# AN IMAGE REFERENCE IS NOT ALWAYS A FACT ABOUT THE SOFTWARE. Where somebody publishes a runnable
+# container, naming its repository here is knowledge and a deployment supplies the version. Where
+# nobody does -- where upstream ships a Dockerfile written against one vendor's compute runtime and
+# every operator builds their own -- there is no reference this repository could state, `image` is
+# `null`, and the translator refuses a declaration that does not carry a whole one. That is the
+# knowledge/value split reaching the least obvious field rather than an omission.
+#
+# WHICH MODEL A WORKLOAD SERVES, in `serves`, keyed into `lib/voices.nix`. It is empty for a tool
+# that runs whatever weights a deployment installs into it, and it names one for an application
+# that IS a model's server -- where the model is what the image was built around rather than
+# content loaded into it. The distinction is the whole reason the second catalogue is voice-shaped
+# and not a checkpoint list; `lib/voices.nix` opens with it.
 {}:
 {
   applications = {
@@ -90,6 +103,13 @@
       # so the guard can compare the path against what the process is actually told below; see
       # `modules/cluster.nix` for what it refuses.
       outputState = "output";
+
+      # NO NAMED MODEL, and that is a fact about this application rather than a gap. A node graph
+      # runs whatever checkpoints, LoRAs and VAEs a deployment put in the directory above; the model
+      # set is CONTENT, it changes on a Tuesday afternoon, and a catalogue of it would be one
+      # deployment's library pretending to be knowledge. Contrast the voice tier below, where the
+      # image was built around one model and swapping the model means swapping the workload.
+      serves = [ ];
 
       # NOBODY. ComfyUI ships no login, no user model and no authorization of any kind -- every
       # visitor gets the same full graph editor. That is not a gap to be configured around: the
@@ -169,6 +189,192 @@
         far it may be exposed, and the module warns rather than refuses only because whether an
         authenticating front sits between it and the world is something a deployment can see and
         this repository cannot.
+      '';
+    };
+
+    # ── The voice tier ────────────────────────────────────────────────────────────────────────
+    #
+    # Two applications rather than one, and they are split on the axis that decides everything
+    # about how a cluster treats them: one burns the card and one does not. Everything else they
+    # have in common -- an HTTP API, a model server, a few directories, no login -- and none of it
+    # would tell a scheduler, an arbiter or a reader which of the two is the expensive one.
+
+    kokoro = {
+      # THE COMMUNITY FASTAPI PACKAGING of the model named in `serves`. Upstream publishes a Python
+      # package and weights, not a server; this image is the assembly that puts an HTTP API in
+      # front of them.
+      #
+      # THE PACKAGING PUBLISHES TWO IMAGES, one built against a vendor compute runtime and one not,
+      # and this entry names the one that is not. That is not a default a deployment overrides: the
+      # accelerated build is a workload that holds a device, which is a different entry with a
+      # different `gpu`, and this repository does not have one. Swapping the reference alone would
+      # give you a pod that burns a card nothing was told about.
+      image = "ghcr.io/remsky/kokoro-fastapi-cpu";
+
+      ports.http = 8880;
+      primaryPort = "http";
+
+      # IT DOES NOT TOUCH THE CARD, and that is the entire reason this half of the tier exists. An
+      # 82M model is real-time on a CPU reservation, so narration costs cores rather than the one
+      # resource every other tenant is queueing for -- and it stays available while the card is
+      # busy, which is the property that actually matters on a single-device cluster.
+      gpu = false;
+
+      # ONE MODEL, and it is not content: this image was built around the model in `serves` and
+      # serving a different one means running a different image. See `lib/voices.nix`.
+      serves = [ "kokoro-82m" ];
+
+      state = {
+        # EXTRA voice packs, beside the released set that ships inside the image. The name is the
+        # vocabulary a declaration has to match, and it says what the directory is FOR rather than
+        # where upstream happens to keep it.
+        voices = "/app/api/src/models/extra";
+      };
+
+      # NOTHING HAS TO ALREADY EXIST, and the contrast with the graph editor above is the point.
+      # An empty extra-voices directory is a deployment with no extra voices: every released voice
+      # is inside the image, so the workload starts, reports ready, and does exactly what it says
+      # on the tin. `mustExist` names the directories where empty is the WHOLE PROBLEM, and this is
+      # not one of them -- so the guard stays silent here rather than being spent on a caution.
+      mustExist = { };
+
+      # NOWHERE. Audio leaves as the response to the request that asked for it; nothing is written
+      # for later, so there is no product directory to route work into and no argument to protect.
+      outputState = null;
+
+      # NOBODY. The API takes a key-shaped field for compatibility with a well-known interface and
+      # enforces nothing behind it, so anything that can open the port can spend the CPU.
+      authenticates = false;
+
+      env = { };
+      args = [ ];
+
+      # THREE MINUTES, and it is a budget for loading a small model and its voice packs off disk
+      # rather than for anything hard. Polled briskly, because a workload that is cheap to start is
+      # a workload worth finding ready quickly.
+      readiness = {
+        path = "/health";
+        periodSeconds = 3;
+        failureThreshold = 60;
+      };
+
+      note = ''
+        Narration. You hand it text and a voice from a fixed set, and it hands back audio -- no
+        reference sample, no cloning, nothing about the request that identifies a person. That is a
+        smaller act than the one below it, and the smaller act is the one that covers most of the
+        work: a caption, a walkthrough, a draft read back to hear whether it scans.
+
+        IT IS THE TIER'S ANSWER TO A BUSY CARD. Two applications that both needed the device would
+        be one queue with two names on it; this one is genuinely elsewhere, so a voice is available
+        while a render or a clone holds the card, and neither has to be scaled down for the other.
+
+        IT IS SAFE TO SLEEP. Nothing fires on a timer and nothing watches a directory, so zero
+        replicas loses no work -- but the case for sleeping is much weaker here than for a device
+        tenant: what a sleeping CPU workload frees is a memory reservation, not the one resource
+        anything is contending for, and the wake latency is paid by whoever asked.
+
+        AND IT AUTHENTICATES NOBODY, which is the field that decides how far it may be exposed.
+      '';
+    };
+
+    chatterbox = {
+      # NO REFERENCE THIS REPOSITORY CAN STATE. Upstream ships a Dockerfile written against one
+      # vendor's compute runtime, so a cluster whose card is anybody else's silicon runs an image
+      # somebody built for it -- and where that image lives, who may pull it and what it was built
+      # from are a deployment's facts, not this software's. `null` is the honest value and the
+      # translator turns it into a refusal: a declaration must carry a whole reference.
+      image = null;
+
+      ports.http = 8004;
+      primaryPort = "http";
+
+      # IT BURNS THE CARD. Not because the model cannot run without one -- `lib/voices.nix` records
+      # that a CPU path exists for it -- but because at this parameter scale the CPU path is slow
+      # enough that nobody waits for it. The burn is a throughput decision made once, here, where a
+      # scheduler and an arbiter can both see it; a model's own `needsGpu` and a workload's `gpu`
+      # are different questions and this tier is where they come apart.
+      gpu = true;
+
+      serves = [ "chatterbox" ];
+
+      state = {
+        # The weights cache the serving stack fills on first start, by downloading them. Backing it
+        # is what stops the download happening again on every restart of a workload that restarts
+        # every time somebody wakes it.
+        cache = "/app/hf_cache";
+
+        # The reference samples a clone is made FROM -- seconds of somebody's recorded speech. It
+        # is durable because a deployment curates it, and it is the most sensitive directory in
+        # this repository's whole cluster plane: what is in it is a person's voice.
+        reference = "/app/reference_audio";
+
+        # The saved voices a clone produced, kept so the same voice can be used again without
+        # re-deriving it from the reference audio.
+        voices = "/app/voices";
+      };
+
+      # NOTHING HAS TO ALREADY EXIST, for a different reason than the CPU half above: these three
+      # directories are all filled by the running process -- the cache by a download, the other two
+      # by an operator working in the UI. An empty one is a cold start, which is slow and correct,
+      # rather than a workload that comes up healthy and can do nothing.
+      mustExist = { };
+
+      # NOWHERE, same as the CPU half: generated audio is the response to the request. A deployment
+      # that wanted generated files kept would be asking for a directory this catalogue does not
+      # describe, and that is a change here rather than a value there.
+      outputState = null;
+
+      # NOBODY. No login, no user model, no token -- and on this application that is a sharper
+      # problem than on the graph editor above, because what an open port buys is the ability to
+      # make a recorded voice say anything.
+      authenticates = false;
+
+      env = { };
+      args = [ ];
+
+      # TEN MINUTES, and it is not one number's worth of caution: a cold start loads a Python and
+      # compute stack, may be downloading weights into the cache above the first time, and on a
+      # cluster that hands out one device it may be waiting for whoever currently holds it.
+      #
+      # THE PROBE PATH IS THE ROOT OF THE SERVER AND NOT A HEALTH ENDPOINT, which looks like
+      # laziness and is a fact: the server has no health path, `/health` answers 404, and the root
+      # answers 200 once the model is loaded. Verified against a running server rather than assumed
+      # from the shape of other services -- a probe pointed at a 404 is a workload that never
+      # becomes ready and reads as a broken application.
+      #
+      # THERE IS DELIBERATELY NO LIVENESS PROBE. Same reason as the graph editor: on a process this
+      # slow to come up, a guessed liveness probe is a restart loop wearing the application's name.
+      readiness = {
+        path = "/";
+        periodSeconds = 5;
+        failureThreshold = 120;
+      };
+
+      note = ''
+        Voice cloning. A few seconds of reference audio, then text, and the output is that voice
+        saying something it never said. The operator is in the loop continuously -- a take is
+        judged by listening to it and the reference, the text or the knobs change -- which is what
+        makes this generative work rather than a job somebody queued.
+
+        IT HOLDS THE WHOLE DEVICE WHILE IT RUNS, exactly like the graph editor: a second replica is
+        a second claim on one card, and on a cluster that hands the device out by count the second
+        pod never schedules. Its durable directories say the same thing from the other side.
+
+        A CARD OFTEN NEEDS AN ARCHITECTURE OVERRIDE, and it is not in this catalogue. A compute
+        runtime that ships kernels for a short list of targets refuses a card that is compatible
+        but absent from the list, and telling it to report a supported target is what makes such a
+        card work at all. WHICH target is a fact about one piece of silicon, so it arrives as
+        environment from the declaration.
+
+        IT IS SAFE TO SLEEP, and here the case is strong: a pod at zero replicas is a card another
+        tenant can have. Nothing fires on a timer and nothing watches a directory, so sleeping
+        loses no work; what it costs is the cold start above, paid by whoever wakes it.
+
+        WHAT IS IN THE REFERENCE DIRECTORY IS A PERSON'S VOICE, and that is worth stating in the
+        catalogue rather than leaving to a deployment to notice. Two consequences that are facts
+        about this application rather than policy: it authenticates nobody, so exposure is the only
+        control there is; and the model it serves watermarks its output by default, so a generated
+        file remains identifiable as generated -- see `lib/voices.nix`.
       '';
     };
   };

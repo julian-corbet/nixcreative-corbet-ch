@@ -31,12 +31,24 @@
 # graphics device. It does not say what the cluster calls that device, how many exist, or who
 # yields it -- those are four fleet facts, they live wherever the fleet is described, and the
 # grammar underneath refuses to render a device request until the site has named its own.
+#
+# ── THE MODEL HALF ─────────────────────────────────────────────────────────────────────────────
+#
+# `lib/voices.nix` says WHICH speech model an application serves, where the model is the thing the
+# image was built around rather than content loaded into it. This module does three things with
+# that and no more: it refuses a catalogue entry that names a model nobody catalogued, it publishes
+# what the declared workloads serve so a consumer does not have to re-derive it, and it warns when
+# a declared workload serves weights whose licence does not clearly permit commercial use. The last
+# one warns rather than refuses for the usual reason -- non-commercial use is perfectly legitimate
+# and whether THIS deployment is commercial is not a fact this repository can see -- but it is not
+# silent either, because a licence read wrong is the expensive kind of mistake.
 { config, lib, ... }:
 
 let
   cfg = config.nixcreative;
   platform = cfg.clusterPlatform;
   catalogue = (import ../lib/applications.nix { }).applications;
+  voices = (import ../lib/voices.nix { }).voices;
 
   declared = lib.filterAttrs (_: w: w.enable) cfg.applications;
   workloads = lib.mapAttrsToList (name: w: { inherit name w; entry = catalogue.${w.app}; }) declared;
@@ -47,7 +59,16 @@ let
   # A whole reference wins over a repository plus a tag, which is what pinning by digest looks
   # like. The catalogue never carries either: a version is a deployment's choice and a digest is
   # one deployment's proof of what it is running.
-  imageOf = entry: w: if w.image != null then w.image else "${entry.image}:${w.version}";
+  #
+  # AND SOMETIMES THE CATALOGUE CARRIES NO REPOSITORY AT ALL, because nobody publishes a runnable
+  # container of that application and every operator builds their own. Then there is nothing to put
+  # a version on and the declaration's whole reference is the only image there is; the assertion
+  # below is what says so in words, and this throw only exists so that a surface which somehow got
+  # past it cannot render a pod with an empty image.
+  imageOf = entry: w:
+    if w.image != null then w.image
+    else if entry.image != null then "${entry.image}:${w.version}"
+    else throw "nixcreative: no image reference -- the catalogue publishes none and the declaration supplies none";
 
   portsOf = entry: lib.mapAttrs (_: number: { inherit number; }) entry.ports;
 
@@ -186,6 +207,46 @@ let
       })
     workloads;
 
+  # THE GUARD FOR AN APPLICATION NOBODY PUBLISHES AN IMAGE OF. Most of what runs here has a
+  # community container somebody maintains, and for those the catalogue names the repository and a
+  # declaration names the version. For the rest there is no reference that is true of the software
+  # anywhere -- upstream ships a build recipe written against one vendor's compute runtime, and the
+  # image a cluster actually runs was built by whoever runs it. `image = null` in the catalogue is
+  # that fact, and this is what stops it becoming a silent hole: a version with nothing to hang it
+  # on is not an image.
+  imageAssertions = lib.concatMap
+    (x:
+      let inherit (x) name w entry; in
+      lib.optional (entry.image == null) {
+        assertion = w.image != null;
+        message =
+          "nixcreative: application `${name}` has no image reference anybody publishes -- upstream ships a "
+          + "build recipe rather than a container, so every cluster runs one it built -- and this "
+          + "declaration supplies none. Give it a whole `image` reference; a `version` alone has no "
+          + "repository to hang on. Pin it by digest if you can: a cold start here is measured in minutes, "
+          + "so a moving tag is a debugging session nobody can reproduce.";
+      })
+    workloads;
+
+  # THE GUARD FOR A MODEL NOBODY CATALOGUED. `serves` is the seam between the two catalogues in
+  # `lib/`, and a seam nothing checks is a typo waiting to be read as a fact. This one cannot fire
+  # on a declaration -- which model an application serves is knowledge, not a value -- so what it
+  # protects is an edit to `lib/applications.nix` that names a model `lib/voices.nix` does not
+  # hold, which would otherwise surface as an attribute error from inside the renderer or, worse,
+  # as nothing at all.
+  servesAssertions = lib.concatMap
+    (x:
+      let inherit (x) name entry; in
+      map
+        (m: {
+          assertion = voices ? ${m};
+          message =
+            "nixcreative: application `${name}` serves `${m}`, which is not in the voice catalogue. "
+            + "Catalogued models: " + lib.concatStringsSep ", " (lib.attrNames voices) + ".";
+        })
+        entry.serves)
+    workloads;
+
   # A namespace outlives every workload in it, so exactly one thing may own it. Two anchors is not a
   # merge, it is two Namespace objects Argo will fight over.
   anchorAssertions =
@@ -221,6 +282,30 @@ let
 
   # A warning is `{ when; message; }` -- the renderer decides whether to print it, so the condition
   # travels with the text rather than being applied here.
+  # A workload's licence position, which is a property of the WEIGHTS it serves and not of the
+  # software serving them. Warned rather than refused, and the reason is not squeamishness: running
+  # a non-commercial model for non-commercial work is exactly what its licence is for, and whether
+  # this deployment is commercial is not visible from here. What is visible is which weights are
+  # about to be served, so the render says so out loud rather than leaving it to whoever reads the
+  # model card next.
+  licenceWarnings = lib.concatMap
+    (x:
+      let inherit (x) name entry; in
+      lib.concatMap
+        (m:
+          let v = voices.${m} or null; in
+          lib.optional (v != null && v.licence.commercialUse != "yes") {
+            when = true;
+            message =
+              "nixcreative: application `${name}` serves ${v.name} (${v.hfRepo}), whose licence "
+              + "(${v.licence.name}) does not clearly permit commercial use: "
+              + oneLine (toString v.licence.caveat)
+              + " This warns rather than refuses -- non-commercial use is what such a licence is for, and "
+              + "whether this deployment is commercial is not something this repository can see.";
+          })
+        entry.serves)
+    workloads;
+
   warnings = lib.concatMap
     (x:
       let inherit (x) name w entry; in
@@ -552,10 +637,52 @@ in
     '';
   };
 
+  # ── Computed, read-only ───────────────────────────────────────────────────────────────────────
+  options.nixcreative.clusterVoices = lib.mkOption {
+    type = lib.types.attrsOf (lib.types.listOf lib.types.str);
+    readOnly = true;
+    default = lib.listToAttrs
+      (map (x: lib.nameValuePair x.name x.entry.serves)
+        (lib.filter (x: x.entry.serves != [ ]) workloads));
+    defaultText = lib.literalExpression "every declared workload that serves a named model";
+    description = ''
+      workload -> the models it serves, by key into `lib/voices.nix`. Nothing is rendered from it:
+      which model an application serves is baked into the image it runs, so there is no manifest
+      field for it. This exists so that a consumer can answer "what voices does this cluster
+      actually serve, and under what licences" from the configuration rather than by opening a
+      container.
+
+      A workload whose model set is CONTENT -- a graph editor running whatever checkpoints a
+      deployment installed -- appears nowhere in here, which is the honest answer rather than an
+      empty one.
+    '';
+  };
+
+  # ── Computed, read-only ───────────────────────────────────────────────────────────────────────
+  options.nixcreative.voiceLicenceReview = lib.mkOption {
+    type = lib.types.attrsOf lib.types.str;
+    readOnly = true;
+    default = lib.mapAttrs (_: v: v.licence.caveat)
+      (lib.filterAttrs (_: v: v.licence.commercialUse != "yes") voices);
+    defaultText = lib.literalExpression "every catalogued voice model whose licence is not plainly commercial-friendly";
+    description = ''
+      model -> what its licence restricts, for every model in the catalogue whose licence does not
+      clearly permit commercial use. Derived from the catalogue and NOT from what is declared, on
+      purpose: the question it answers is asked before a workload exists, by whoever is choosing
+      which model to serve.
+
+      It is a list of restrictions rather than a list of refusals. Two of the entries carry
+      permissive CODE and non-commercial WEIGHTS, which is the shape that gets read wrong -- and
+      one of those carries no licence tag at all, so anything that keys on the tag records it as
+      unlicensed and moves on.
+    '';
+  };
+
   config = {
     nixk3s.apps = lib.listToAttrs (map (x: lib.nameValuePair x.name (mkApp x)) workloads);
     nixidy.assertions =
-      stateAssertions ++ existenceAssertions ++ outputAssertions ++ anchorAssertions ++ slotAssertions;
-    nixidy.warnings = warnings;
+      stateAssertions ++ existenceAssertions ++ outputAssertions ++ imageAssertions
+      ++ servesAssertions ++ anchorAssertions ++ slotAssertions;
+    nixidy.warnings = warnings ++ licenceWarnings;
   };
 }

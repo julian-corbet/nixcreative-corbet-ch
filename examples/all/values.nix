@@ -6,19 +6,25 @@
 # for this file, and no credential appears in any form — only the NAME of a Secret that would hold
 # one.
 #
-# THE CATALOGUE HOLDS ONE APPLICATION, so the two declarations below are two deployments of it
-# rather than two different things, and they are chosen to cover the paths that differ in what gets
-# RENDERED rather than merely in what evaluates:
+# FOUR DECLARATIONS, chosen to cover the paths that differ in what gets RENDERED rather than
+# merely in what evaluates. The first two are two deployments of ONE application, which is not a
+# shape anybody would run — an example file is not a cluster, and what they exist to do is exercise
+# both halves of every branch:
 #
-#   - one that anchors the shared namespace, takes its image as a repository plus a version, sleeps
-#     behind a wake front, backs every directory on a node path, and adds the environment a
-#     particular piece of silicon needs;
+#   - one that anchors a namespace, takes its image as a repository plus a version, sleeps behind a
+#     wake front, backs every directory on a node path, and adds the environment a particular piece
+#     of silicon needs;
 #   - one that joins that namespace rather than creating a second one, is pinned by digest, stays
 #     resident, reads its weights read-only out of an existing claim instead of off a node — which
 #     is the other backing, and the one the existence guard deliberately cannot check.
 #
-# Two deployments of one application sharing one card is not a shape anybody would run; an example
-# file is not a cluster, and what these two exist to do is exercise both halves of every branch.
+# The other two are the voice tier, in a SECOND namespace of its own, and they are here because
+# between them they are the only place several branches are taken at all:
+#
+#   - a workload that does NOT burn the card, so a rendered pod with no device request is something
+#     the checks can actually read rather than a claim about an option;
+#   - a workload whose catalogue entry publishes no image, so the whole reference is not an
+#     override of anything — it is the only image there is, and leaving it out is refused.
 {
   # Required by the nixidy environment itself, not by any module here.
   nixidy.target.repository = "https://example.com/example-org/example-gitops.git";
@@ -88,5 +94,71 @@
       hostPathType = "DirectoryOrCreate";
     };
     state.output.hostPath = "/example/renders-studio";
+  };
+
+  # ── The voice tier, in a namespace of its own ───────────────────────────────────────────────
+  #
+  # Anchoring a SECOND namespace, which is the case the anchor guard exists for: exactly one
+  # workload may own each, and two namespaces each anchored once is the shape that proves the guard
+  # counts per namespace rather than per render.
+
+  # The half that never touches the card. Nothing here says so — `gpu` is not a declaration's
+  # option — so what a reader sees is the absence of every device-shaped thing in the manifest,
+  # which is exactly what the render check reads back.
+  nixcreative.applications.example-narration = {
+    app = "kokoro";
+    version = "0.0.0";
+    namespace = "example-voice";
+    createNamespace = true;
+    exposure = "internal";
+    slot = 14;
+
+    # Extra voice packs, on a node path that is CREATED when missing — allowed here and refused for
+    # the graph editor's weights above, because the catalogue says which directories are useless
+    # empty and this is not one of them: every released voice ships inside the image.
+    state.voices = {
+      hostPath = "/example/state/voices";
+      hostPathType = "DirectoryOrCreate";
+    };
+
+    # Cores rather than a card, which is the whole point of this half of the tier.
+    resources.requests.cpu = "500m";
+    resources.requests.memory = "1Gi";
+    resources.limits.memory = "2Gi";
+  };
+
+  # The half that burns the card. Its catalogue entry publishes no image — nobody ships a runnable
+  # container of it — so the whole reference below is not overriding anything, and a declaration
+  # without one is refused rather than rendered with a version hanging off nothing.
+  nixcreative.applications.example-cloning = {
+    app = "chatterbox";
+    version = "0.0.0";
+    image = "registry.example.com/example-org/example-cloning:0.0.0@sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    namespace = "example-voice";
+    exposure = "nb";
+    slot = 15;
+
+    # A card is worth freeing when nobody is using it, which is a stronger case for sleeping than
+    # idle memory ever is.
+    scaling = "scale-to-zero";
+    wake = "sablier";
+
+    # All three directories are filled by the running process, so all three may be created when
+    # missing: a cold start is slow and correct, which is not what `mustExist` is about.
+    state.cache = {
+      hostPath = "/example/state/cloning-cache";
+      hostPathType = "DirectoryOrCreate";
+    };
+    state.reference = {
+      hostPath = "/example/state/cloning-reference";
+      hostPathType = "DirectoryOrCreate";
+    };
+    state.voices = {
+      hostPath = "/example/state/cloning-voices";
+      hostPathType = "DirectoryOrCreate";
+    };
+
+    # A fact about one piece of silicon, invented here like everything else in this file.
+    env.HSA_OVERRIDE_GFX_VERSION = "0.0.0";
   };
 }

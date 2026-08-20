@@ -1,5 +1,5 @@
 {
-  description = "nixcreative — declarative creative tool selection for creation workflows (DAW, vector, raster, 3D), plus the generative-media applications that run in the cluster instead of on a desk.";
+  description = "nixcreative — declarative creative tool selection for creation workflows (DAW, vector, raster, 3D), plus the generative-media applications that run in the cluster instead of on a desk and the speech models they serve.";
 
   # THE PACKAGE SIDE STILL TAKES NOTHING BUT NIXPKGS. `nixidy` and `nixk3s` below are used by
   # `checks` ALONE; nothing this flake exports reaches into either, so a host that imports the
@@ -68,9 +68,15 @@
       nixidyModules.nixcreative = ./modules/cluster.nix;
       nixidyModules.default = ./modules/cluster.nix;
 
-      # Expose both catalogues for introspection, docs, and checks.
+      # Expose every catalogue for introspection, docs, and checks.
       lib.catalogue = import ./lib/creative.nix { };
       lib.applications = (import ./lib/applications.nix { }).applications;
+
+      # The voice-model catalogue: which speech model a cluster workload serves, and the facts that
+      # decide whether it can be served at all. Exported for the same reason as the other two --
+      # something outside this flake has to be able to read a licence position without evaluating
+      # a module or opening a container.
+      lib.voices = (import ./lib/voices.nix { }).voices;
 
       checks = forAllSystems (system:
         let
@@ -78,6 +84,11 @@
         in
         {
           catalogue-eval = import ./checks/catalogue-eval.nix { inherit pkgs; };
+
+          # The voice catalogue's own evidence rule, and the seam between the two `lib/`
+          # catalogues. Pure data, so it is honest on every system rather than narrowed like the
+          # two cluster checks below.
+          voices-eval = import ./checks/voices-eval.nix { inherit pkgs; };
         }
         // lib.optionalAttrs (lib.elem system clusterSystems) {
           # The cluster module's own resolution and every guard it makes, in BOTH directions: an

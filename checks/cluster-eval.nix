@@ -17,6 +17,7 @@
 
 let
   base = import values;
+  voices = (import ../lib/voices.nix { }).voices;
 
   mkEnv = v: nixidy.lib.mkEnv {
     inherit pkgs;
@@ -65,9 +66,9 @@ let
     "an undeclared surface renders no apps at all, rather than a default one" =
       emptyCfg.nixk3s.apps == { };
 
-    "both declared workloads reach the grammar" =
+    "every declared workload reaches the grammar" =
       lib.sort (a: b: a < b) (lib.attrNames goodCfg.nixk3s.apps)
-      == [ "example-graphs" "example-studio" ];
+      == [ "example-cloning" "example-graphs" "example-narration" "example-studio" ];
 
     "the catalogue supplies the port, and the declaration never states one" =
       goodCfg.nixk3s.apps.example-graphs.ports.http.number == 8188
@@ -87,9 +88,50 @@ let
       goodCfg.nixk3s.apps.example-graphs.gpu
       && goodCfg.nixk3s.apps.example-studio.gpu;
 
+    # THE ONE PROPERTY THE TIER IS SPLIT FOR. Three of the four workloads burn the card and one
+    # does not, and the list has to say so -- a repository that treated "creative workload" as a
+    # synonym for "device tenant" would hand the arbiter underneath a name it must never scale for
+    # VRAM, and would leave the cheap half of the voice tier competing for a resource it does not
+    # use.
     "the module knows which of its workloads hold a device, without deciding anything about one" =
       lib.sort (a: b: a < b) goodCfg.nixcreative.clusterDeviceTenants
-      == [ "example-graphs" "example-studio" ];
+      == [ "example-cloning" "example-graphs" "example-studio" ];
+
+    "and the half that does not burn the card is absent from that list rather than merely last" =
+      !(lib.elem "example-narration" goodCfg.nixcreative.clusterDeviceTenants);
+
+    "the catalogue supplies each voice port, and neither declaration states one" =
+      goodCfg.nixk3s.apps.example-narration.ports.http.number == 8880
+      && goodCfg.nixk3s.apps.example-cloning.ports.http.number == 8004;
+
+    # ── The model half ────────────────────────────────────────────────────────────────────────
+    "which model a workload serves reaches the consumer, keyed into the voice catalogue" =
+      goodCfg.nixcreative.clusterVoices == {
+        example-narration = [ "kokoro-82m" ];
+        example-cloning = [ "chatterbox" ];
+      };
+
+    "a workload whose model set is CONTENT names no model at all, rather than an empty guess" =
+      !(goodCfg.nixcreative.clusterVoices ? example-graphs);
+
+    "every model a declared workload serves is one the voice catalogue actually holds" =
+      lib.all (m: voices ? ${m}) (lib.flatten (lib.attrValues goodCfg.nixcreative.clusterVoices));
+
+    "a declaration cannot choose which model a workload serves -- that is what the image IS" =
+      !renders (with' { nixcreative.applications.example-narration.serves = [ "chatterbox" ]; });
+
+    # THE LICENCE POSITION, published from the catalogue rather than from what is declared: it is
+    # read BEFORE a workload exists, by whoever is choosing what to serve.
+    "the licence review names every catalogued model whose licence is not plainly commercial" =
+      lib.sort (a: b: a < b) (lib.attrNames goodCfg.nixcreative.voiceLicenceReview)
+      == lib.sort (a: b: a < b)
+        (lib.attrNames (lib.filterAttrs (_: v: v.licence.commercialUse != "yes") voices));
+
+    "and it is not empty, because two of the catalogued models carry non-commercial weights" =
+      goodCfg.nixcreative.voiceLicenceReview != { };
+
+    "no declared workload serves weights whose licence forbids commercial use" =
+      !(warnsWith "does not clearly permit commercial use" base);
 
     "the parent directory sorts before the one nested inside it, so no mount covers another" =
       let keys = lib.attrNames goodCfg.nixk3s.apps.example-graphs.state; in
@@ -143,9 +185,23 @@ let
       failsWith "nothing it is told mentions that path"
         (with' { nixcreative.applications.example-graphs.env.CLI_ARGS = "--listen 0.0.0.0"; });
 
+    # AN APPLICATION NOBODY PUBLISHES AN IMAGE OF. The catalogue carries no repository for it --
+    # upstream ships a build recipe written against one vendor's compute runtime, so the container a
+    # cluster runs is one it built -- and a version with nothing to hang on is not an image.
+    "a workload whose catalogue publishes no image is refused without a whole reference" =
+      failsWith "has no image reference anybody publishes"
+        (lib.recursiveUpdate base { nixcreative.applications.example-cloning.image = lib.mkForce null; });
+
+    "and the same declaration renders as soon as it carries one" =
+      renders base;
+
     "two workloads anchoring one namespace is refused" =
       failsWith "Exactly one workload may create a namespace"
         (with' { nixcreative.applications.example-studio.createNamespace = true; });
+
+    "a second namespace is anchored independently, and anchoring it twice is refused too" =
+      failsWith "is anchored by 2 applications"
+        (with' { nixcreative.applications.example-cloning.createNamespace = true; });
 
     "two workloads on one slot is refused" =
       failsWith "is claimed by 2 applications"
@@ -176,8 +232,12 @@ pkgs.runCommand "nixcreative-cluster-eval" { } (
     touch $out
   ''
   else ''
+    # A QUOTED HEREDOC, not a series of `echo` calls: a property name is prose, prose contains
+    # backticks, and a backtick inside a double-quoted shell string is command substitution.
     echo "nixcreative cluster-eval FAILED (${toString (lib.length failed)}/${toString (lib.length (lib.attrNames results))}):" >&2
-    ${lib.concatMapStringsSep "\n" (n: ''echo "  - ${n}" >&2'') failed}
+    cat >&2 <<'PROPERTIES'
+    ${lib.concatMapStringsSep "\n" (n: "  - " + n) failed}
+    PROPERTIES
     exit 1
   ''
 )
